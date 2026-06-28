@@ -1,0 +1,125 @@
+{
+  "name": "@repo/supabase",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./next/server": {
+      "types": "./src/next/server.ts",
+      "default": "./src/next/server.ts"
+    },
+    "./next/client": {
+      "types": "./src/next/client.ts",
+      "default": "./src/next/client.ts"
+    },
+    "./next/admin": {
+      "types": "./src/next/admin.ts",
+      "default": "./src/next/admin.ts"
+    },
+    "./next/proxy": {
+      "types": "./src/next/proxy.ts",
+      "default": "./src/next/proxy.ts"
+    },
+    "./queries/clips": {
+      "types": "./src/queries/clips.ts",
+      "default": "./src/queries/clips.ts"
+    },
+    "./queries/overlays": {
+      "types": "./src/queries/overlays.ts",
+      "default": "./src/queries/overlays.ts"
+    },
+    "./queries/user": {
+      "types": "./src/queries/user.ts",
+      "default": "./src/queries/user.ts"
+    },
+    "./queries/vods": {
+      "types": "./src/queries/vods.ts",
+      "default": "./src/queries/vods.ts"
+    },
+    "./queries/commands": {
+      "types": "./src/queries/commands.ts",
+      "default": "./src/queries/commands.ts"
+    },
+    "./queries/stream-analytics": {
+      "types": "./src/queries/stream-analytics.ts",
+      "default": "./src/queries/stream-analytics.ts"
+    },
+    "./queries/public": {
+      "types": "./src/queries/public.ts",
+      "default": "./src/queries/public.ts"
+    },
+    "./queries/sync": {
+      "types": "./src/queries/sync.ts",
+      "default": "./src/queries/sync.ts"
+    },
+    "./queries/live-status": {
+      "types": "./src/queries/live-status.ts",
+      "default": "./src/queries/live-status.ts"
+    },
+    "./queries/viewer-counts": {
+      "types": "./src/queries/viewer-counts.ts",
+      "default": "./src/queries/viewer-counts.ts"
+    },
+    "./queries/smp": {
+      "types": "./src/queries/smp.ts",
+      "default": "./src/queries/smp.ts"
+    },
+    "./queries/irl": {
+      "types": "./src/queries/irl.ts",
+      "default": "./src/queries/irl.ts"
+    },
+    "./queries/ingest": {
+      "types": "./src/queries/ingest.ts",
+      "default": "./src/queries/ingest.ts"
+    },
+    "./queries/obs-nodes": {
+      "types": "./src/queries/obs-nodes.ts",
+      "default": "./src/queries/obs-nodes.ts"
+    },
+    "./queries/discord": {
+      "types": "./src/queries/discord.ts",
+      "default": "./src/queries/discord.ts"
+    },
+    "./queries/tickets": {
+      "types": "./src/queries/tickets.ts",
+      "default": "./src/queries/tickets.ts"
+    },
+    "./types/supabase": {
+      "types": "./src/types/supabase.ts",
+      "default": "./src/types/supabase.ts"
+    },
+    "./crypto": {
+      "types": "./src/crypto.ts",
+      "default": "./src/crypto.ts"
+    }
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "gen-types": "supabase gen types typescript --project-id jgxdrljoqployiyjedst --schema public > src/types/supabase.ts"
+  },
+  "dependencies": {
+    "@repo/metrics": "workspace:*",
+    "@supabase/supabase-js": "^2.105.1",
+    "@supabase/ssr": "^0.8.0"
+  },
+  "peerDependencies": {
+    "next": ">=15.0.0"
+  },
+  "peerDependenciesMeta": {
+    "next": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "workspace:*",
+    "@types/node": "^25.0.8",
+    "typescript": "^5.7.3"
+  }
+}

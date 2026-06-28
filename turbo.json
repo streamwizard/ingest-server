@@ -1,0 +1,23 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalEnv": ["SKIP_ENV_VALIDATION"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"]
+    },
+    "dev": {
+      "cache": false
+    },
+    "start": {
+      "dependsOn": ["^build"],
+      "cache": false
+    },
+    "check-types": {
+      "dependsOn": ["^check-types"]
+    },
+    "lint": {
+      "dependsOn": ["^lint"]
+    }
+  }
+}
