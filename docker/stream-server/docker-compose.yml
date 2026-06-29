@@ -13,12 +13,10 @@ services:
     build:
       context: ../..
       dockerfile: apps/ingest-control/Dockerfile
+    env_file:
+      - ../../.env
     environment:
-      DOPPLER_TOKEN: ${DOPPLER_TOKEN}
-      # Operational (non-secret) config; Supabase + InfluxDB creds come from Doppler.
-      INGEST_CONTROL_SECRET: ${INGEST_CONTROL_SECRET}
       PORT: "8090"
-      WS_SERVER_URL: ${WS_SERVER_URL}
     networks:
       - stream-server
     restart: unless-stopped
@@ -27,9 +25,10 @@ services:
     build:
       context: ../..
       dockerfile: apps/ingest-media/Dockerfile
+    env_file:
+      - ../../.env
     environment:
       INGEST_CONTROL_URL: http://ingest-control:8090
-      INGEST_CONTROL_SECRET: ${INGEST_CONTROL_SECRET}
       INGEST_SRT_PORT: "8888"
       INGEST_SRTLA_SRT_PORT: "8889"
       INGEST_OUTPUT_PORT: "9000"
