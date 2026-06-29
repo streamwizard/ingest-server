@@ -15,8 +15,6 @@ services:
       dockerfile: apps/ingest-control/Dockerfile
     env_file:
       - ../../.env
-    environment:
-      PORT: "8090"
     networks:
       - stream-server
     restart: unless-stopped
@@ -27,12 +25,6 @@ services:
       dockerfile: apps/ingest-media/Dockerfile
     env_file:
       - ../../.env
-    environment:
-      INGEST_CONTROL_URL: http://ingest-control:8090
-      INGEST_SRT_PORT: "8888"
-      INGEST_SRTLA_SRT_PORT: "8889"
-      INGEST_OUTPUT_PORT: "9000"
-      INGEST_SRT_LATENCY_MS: "4000"
     ports:
       - "8888:8888/udp"   # public SRT ingest
       # Output OBS pulls from — published ONLY on the Tailscale interface so it
