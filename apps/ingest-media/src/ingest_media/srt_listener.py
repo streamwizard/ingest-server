@@ -75,7 +75,7 @@ class SrtListener:
 
         auth = self._control.authorize(self._protocol, stream_key, peer_ip)
         if auth is None:
-            log.info("%s connection from %s rejected: unauthorized", self._protocol, peer_ip)
+            log.warning("%s connection from %s rejected: unauthorized (stream_key=%s***)", self._protocol, peer_ip, stream_key[:6])
             libsrt.close(conn)
             return
 

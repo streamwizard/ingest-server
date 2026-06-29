@@ -105,10 +105,20 @@ class OutputRouter:
                     log.error("output accept failed: %s", exc)
                 continue
             output_key = libsrt.parse_stream_key(libsrt.get_streamid(conn))
+            if not output_key:
+                log.warning("output: rejected OBS from %s (no streamid — set the output key as SRT stream ID in OBS)", peer_ip)
+                libsrt.close(conn)
+                continue
             with self._lock:
-                channel = self._routes.get(output_key) if output_key else None
+                channel = self._routes.get(output_key)
+                active_keys = list(self._routes.keys())
             if channel is None:
-                log.info("output: rejected OBS from %s (unknown/inactive output key)", peer_ip)
+                log.warning(
+                    "output: rejected OBS from %s (output key %s*** not found — active keys: %s)",
+                    peer_ip,
+                    output_key[:6],
+                    [k[:6] + "***" for k in active_keys] if active_keys else "none (no live stream)",
+                )
                 libsrt.close(conn)
                 continue
             channel.attach(conn)

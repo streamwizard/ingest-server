@@ -47,8 +47,12 @@ class ControlClient:
             with urllib.request.urlopen(req, timeout=self._config.control_timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            # 403 = invalid key; any non-2xx means "do not accept this stream".
-            log.info("control %s rejected: %s", path, exc.code)
+            try:
+                body = json.loads(exc.read().decode("utf-8"))
+                reason = body.get("error", exc.reason)
+            except Exception:
+                reason = exc.reason
+            log.warning("control %s rejected (%s): %s", path, exc.code, reason)
             return None
         except (urllib.error.URLError, TimeoutError, http.client.RemoteDisconnected, ConnectionError) as exc:
             log.error("control %s unreachable: %s", path, exc)
