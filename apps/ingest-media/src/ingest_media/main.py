@@ -1,25 +1,20 @@
 """Entrypoint for the ingest media plane.
 
-Starts the SRT (public), SRTLA (internal, fed by srtla_receiver), and RTMP
-listeners, then runs the GLib main loop that drives the GStreamer relays.
+Pure libsrt: a shared output listener (OBS pulls, routed by output-key streamid)
+plus the SRT (public) and SRTLA (internal, fed by srtla_receiver) input
+listeners. No GStreamer/GLib — input MPEG-TS is relayed verbatim to OBS.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import signal
 import threading
 
-import gi
-
-gi.require_version("GLib", "2.0")
-from gi.repository import GLib  # noqa: E402
-
 from . import libsrt
 from .config import load_config
 from .control_client import ControlClient
-from .rtmp_listener import RtmpServer
+from .output_router import OutputRouter
 from .srt_listener import SrtListener
 
 
@@ -34,36 +29,29 @@ def main() -> None:
     libsrt.startup()
     control = ControlClient(config)
 
-    srt = SrtListener(config.srt_port, "srt", control)
-    srtla = SrtListener(config.srtla_srt_port, "srtla", control)
+    router = OutputRouter(config.output_port, latency_ms=config.srt_latency_ms)
+    router.start()
+
+    srt = SrtListener(config.srt_port, "srt", control, router, latency_ms=config.srt_latency_ms)
+    srtla = SrtListener(config.srtla_srt_port, "srtla", control, router, latency_ms=config.srt_latency_ms)
     srt.start()
     srtla.start()
 
-    # RTMP runs on its own asyncio loop in a background thread.
-    rtmp_server = RtmpServer(control)
-
-    def run_rtmp() -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(rtmp_server.create("0.0.0.0", config.rtmp_port))
-        loop.run_forever()
-
-    threading.Thread(target=run_rtmp, name="rtmp-loop", daemon=True).start()
-
-    glib_loop = GLib.MainLoop()
+    stop = threading.Event()
 
     def shutdown(*_args) -> None:
         log.info("shutting down")
         srt.stop()
         srtla.stop()
+        router.stop()
         libsrt.cleanup()
-        glib_loop.quit()
+        stop.set()
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
     log.info("ingest media plane started")
-    glib_loop.run()
+    stop.wait()
 
 
 if __name__ == "__main__":

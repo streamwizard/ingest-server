@@ -4,8 +4,8 @@ Standalone monorepo for the StreamWizard ingest stack.
 
 ## Apps
 
-- `apps/ingest-control` - Bun/Hono control plane that authorizes stream keys, records ingest sessions, and provisions OBS containers.
-- `apps/ingest-media` - Python/GStreamer media plane for RTMP, SRT, and SRTLA ingest.
+- `apps/ingest-control` - Bun/Hono control plane that authorizes stream keys, resolves output keys, and records ingest sessions + metrics.
+- `apps/ingest-media` - Pure Python + libsrt media plane for SRT and SRTLA ingest, routing OBS pulls by output-key streamid.
 
 ## Supporting Packages
 

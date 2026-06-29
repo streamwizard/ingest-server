@@ -16,23 +16,33 @@ from typing import Optional
 
 from . import libsrt
 from .control_client import ControlClient
-from .pipelines import SrtPassthroughRelay
+from .output_router import OutputChannel, OutputRouter
+from .stream_relay import SrtRelay
 
 log = logging.getLogger(__name__)
 
 
 class SrtListener:
-    def __init__(self, port: int, protocol: str, control: ControlClient) -> None:
+    def __init__(
+        self,
+        port: int,
+        protocol: str,
+        control: ControlClient,
+        router: OutputRouter,
+        latency_ms: int = 0,
+    ) -> None:
         assert protocol in ("srt", "srtla")
         self._port = port
         self._protocol = protocol
         self._control = control
+        self._router = router
+        self._latency_ms = latency_ms
         self._listen_sock: Optional[int] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
 
     def start(self) -> None:
-        self._listen_sock = libsrt.create_listener(self._port)
+        self._listen_sock = libsrt.create_listener(self._port, latency_ms=self._latency_ms)
         self._running = True
         self._thread = threading.Thread(target=self._accept_loop, name=f"{self._protocol}-listen", daemon=True)
         self._thread.start()
@@ -55,6 +65,7 @@ class SrtListener:
             ).start()
 
     def _handle_connection(self, conn: int, peer_ip: Optional[str]) -> None:
+        log.info("%s connection from %s", self._protocol, peer_ip)
         streamid = libsrt.get_streamid(conn)
         stream_key = libsrt.parse_stream_key(streamid)
         if not stream_key:
@@ -68,16 +79,23 @@ class SrtListener:
             libsrt.close(conn)
             return
 
-        log.info("%s session %s started for user %s", self._protocol, auth.session_id, auth.user_id)
+        log.info(
+            "%s session %s started for user %s (%d output key(s))",
+            self._protocol, auth.session_id, auth.user_id, len(auth.output_keys),
+        )
+
+        channel = OutputChannel(auth.session_id)
+        self._router.register(auth.output_keys, channel)
 
         def on_end(last_bitrate_kbps: Optional[int]) -> None:
+            self._router.unregister(auth.output_keys)
             log.info("%s session %s ended", self._protocol, auth.session_id)
             self._control.session_end(auth.session_id, auth.user_id, last_bitrate_kbps)
 
         def on_stats(stats: dict) -> None:
             self._control.session_stats(auth.session_id, auth.user_id, self._protocol, stats)
 
-        relay = SrtPassthroughRelay(conn, auth.output_target, on_end, on_stats)
+        relay = SrtRelay(conn, channel, on_end, on_stats)
         relay.start()
 
     def stop(self) -> None:

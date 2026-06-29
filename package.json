@@ -3,8 +3,9 @@
   "private": true,
   "scripts": {
     "build": "turbo run build",
-    "dev": "turbo run dev",
-    "dev:control": "turbo run dev --filter=@repo/ingest-control",
+    "dev": "concurrently --kill-others-on-fail -n control,media -c blue,green \"bun run dev:control\" \"bun run dev:media\"",
+    "dev:control": "doppler run -- turbo run dev --filter=@repo/ingest-control",
+    "dev:media": "cd apps/ingest-media/src && doppler run -- python3 -m ingest_media",
     "compose:up": "docker compose -f docker/stream-server/docker-compose.yml up --build",
     "compose:down": "docker compose -f docker/stream-server/docker-compose.yml down",
     "lint": "turbo run lint",
@@ -12,6 +13,7 @@
     "check-types": "bun x turbo run check-types"
   },
   "devDependencies": {
+    "concurrently": "^10.0.3",
     "prettier": "^3.7.4",
     "shadcn": "^4.11.0",
     "turbo": "^2.9.15",

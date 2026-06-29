@@ -15,16 +15,10 @@ services:
       dockerfile: apps/ingest-control/Dockerfile
     environment:
       DOPPLER_TOKEN: ${DOPPLER_TOKEN}
-      # Operational (non-secret) config; Supabase creds come from Doppler.
+      # Operational (non-secret) config; Supabase + InfluxDB creds come from Doppler.
       INGEST_CONTROL_SECRET: ${INGEST_CONTROL_SECRET}
-      INGEST_OBS_IMAGE: ${INGEST_OBS_IMAGE}
-      INGEST_OBS_NETWORK: stream-server
-      INGEST_OBS_SRT_PORT: "9000"
       PORT: "8090"
       WS_SERVER_URL: ${WS_SERVER_URL}
-    volumes:
-      # Needed to provision/tear down per-streamer OBS containers.
-      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - stream-server
     restart: unless-stopped
@@ -38,10 +32,14 @@ services:
       INGEST_CONTROL_SECRET: ${INGEST_CONTROL_SECRET}
       INGEST_SRT_PORT: "8888"
       INGEST_SRTLA_SRT_PORT: "8889"
-      INGEST_RTMP_PORT: "1935"
+      INGEST_OUTPUT_PORT: "9000"
+      INGEST_SRT_LATENCY_MS: "4000"
     ports:
       - "8888:8888/udp"   # public SRT ingest
-      - "1935:1935/tcp"   # public RTMP ingest
+      # Output OBS pulls from — published ONLY on the Tailscale interface so it
+      # is never exposed to the public internet. Set TAILSCALE_IP in .env to the
+      # VM's Tailscale address.
+      - "${TAILSCALE_IP}:9000:9000/udp"
     networks:
       - stream-server
     depends_on:

@@ -4,6 +4,7 @@ export { trackWsConnection, trackWsMessage, trackWsAuthFailure, trackWsMessageDr
 export { trackHttpRequest, metricsMiddleware } from "./http-metrics";
 export { trackSupabaseQuery } from "./supabase-metrics";
 export { trackEventSubReceived, trackEventSubRevocation } from "./eventsub-metrics";
+export { trackIngestStreamSample, type IngestStreamSample } from "./ingest-metrics";
 
 // Query (read) exports — server-only, InfluxDB read path
 export { runFluxQuery } from "./query-client";

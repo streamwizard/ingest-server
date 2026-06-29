@@ -1,40 +1,54 @@
 # Stream-box ingest stack
 
-Deploys the StreamWizard ingest server on a **dedicated stream box** (not Dokploy),
-alongside the per-streamer OBS containers it provisions.
+Deploys the StreamWizard ingest server on the **Hetzner ingest VM**. It receives
+SRT/SRTLA from streamers on its public interface and exposes a single SRT output
+that the OBS servers pull from over **Tailscale** (the OBS boxes live elsewhere —
+they are not part of this stack).
 
 ## Components
 
 | Service | Image | Ports (host) | Role |
 | --- | --- | --- | --- |
-| `ingest-control` | `apps/ingest-control` (Bun) | internal `8090` | Validates stream keys against Supabase, provisions OBS, records sessions |
-| `ingest-media` | `apps/ingest-media` (Python/GStreamer) | `8888/udp` (SRT), `1935/tcp` (RTMP) | Authorizes + passthrough-relays feeds to OBS |
+| `ingest-control` | `apps/ingest-control` (Bun) | internal `8090` | Validates stream keys against Supabase, resolves output keys, records sessions + metrics |
+| `ingest-media` | `apps/ingest-media` (pure Python + libsrt) | `8888/udp` (SRT in), `9000/udp` (SRT out, Tailscale-only) | Authorizes + passthrough-relays feeds; routes OBS pulls by output-key streamid |
 | `srtla-receiver` | Belabox `srtla_rec` | `5000/udp` (SRTLA) | Bonds SRTLA links → internal SRT (`ingest-media:8889`) |
-| `sw-obs-<user>` | `$INGEST_OBS_IMAGE` | — | One per active streamer, created at runtime by `ingest-control` |
 
-The dynamically-created OBS containers join the `stream-server` network and listen
-for SRT on `9000`; the media plane pushes each tenant's feed to `srt://sw-obs-<user>:9000`.
+There are no OBS containers on this box. OBS connects from the home/OBS server as
+an SRT caller (a Media Source) to the output listener over Tailscale.
 
-## Streamer ingest URLs
+## Streamer ingest URLs (public)
 
-- **RTMP:** `rtmp://<box-host>/live/<stream-key>`
 - **SRT:** `srt://<box-host>:8888?streamid=<stream-key>`
 - **SRTLA:** host `<box-host>`, port `5000`, with the SRT `streamid` set to `<stream-key>`
+
+## OBS pull URL (over Tailscale)
+
+In OBS, add a **Media Source** with:
+
+```
+srt://<vm-tailscale-ip>:9000?streamid=<output-key>&latency=4000
+```
+
+The `output-key` must be an active row in `ingest_output_keys` paired with the
+streamer's incoming key. The output port is published **only** on the Tailscale
+interface, so it is never reachable from the public internet.
 
 ## Run
 
 ```bash
-cp .env.example .env   # fill in DOPPLER_TOKEN, INGEST_CONTROL_SECRET, INGEST_OBS_IMAGE
+cp .env.example .env   # fill in DOPPLER_TOKEN, INGEST_CONTROL_SECRET, TAILSCALE_IP
 docker compose up --build -d
 docker compose logs -f
 ```
 
 ## Notes
 
-- The control plane mounts the host Docker socket to manage OBS containers — keep
-  that container minimal and the box locked down.
 - `INGEST_CONTROL_SECRET` must match across `ingest-control` and `ingest-media`
   (compose wires both from the same `.env` var).
+- `TAILSCALE_IP` is the VM's Tailscale address; the `:9000` output port binds
+  only to it. Leave it empty locally to publish on all interfaces for testing.
+- Set `INGEST_SRT_LATENCY_MS` (default `4000`) to the SRT receiver latency; match
+  it on the OBS Media Source `latency=` query param.
 - Pin the Belabox `srtla` revision in `srtla/Dockerfile` for reproducible builds.
-- The OBS image (`$INGEST_OBS_IMAGE`) is provided separately; it must read
-  `INPUT_URL` (an SRT listener URL) and forward to the streamer's destination.
+- Live + global metrics are written to InfluxDB (set `INFLUXDB_*`, supplied via
+  Doppler) and pushed live over WebSocket; durable session records go to Supabase.

@@ -1,29 +1,35 @@
 # ingest-media
 
-The Python media plane for the StreamWizard ingest server. Accepts RTMP, SRT, and
-SRTLA from IRL streamers, authorizes each connection against the Bun control
-plane, and passthrough-relays (no transcode) the feed to the streamer's OBS
-container over SRT.
+The media plane for the StreamWizard ingest server. Accepts SRT and SRTLA from
+IRL streamers, authorizes each connection against the Bun control plane, and
+passthrough-relays (no transcode) the feed to OBS, which pulls it over SRT. It is
+**pure libsrt over ctypes** — no GStreamer, no third-party Python packages.
 
 ## How it works
 
 ```
-streamer ──RTMP──────────────► rtmp_listener (pyrtmp) ─┐
-streamer ──SRT (streamid=key)─► srt_listener (libsrt)  ├─► authorize() ─► control plane
-srtla_receiver ──SRT internal─► srt_listener (srtla)   ┘        │
-                                                                ▼
-                                          GStreamer passthrough ─► srt://sw-obs-<user>:9000
+streamer ──SRT (streamid=in-key)─► srt_listener  ─┐
+srtla_receiver ──SRT internal────► srt_listener   ┤─► authorize() ─► control plane
+                                                  │        (returns output key[s])
+                                                  ▼
+                                         OutputChannel (per session)
+                                                  ▲
+OBS Media Source ──SRT (streamid=out-key)─► output_router :9000
 ```
 
-- **SRT / SRTLA** (`srt_listener.py`, `libsrt.py`): one libsrt listener socket per
-  port accepts many callers; the `streamid` carries the stream key. SRTLA arrives
-  on an internal port fed by the Belabox `srtla_receiver` and is otherwise plain
-  SRT — only the reported protocol label differs. The accepted MPEG-TS is relayed
-  verbatim to OBS via a GStreamer `appsrc ! srtsink` pipeline.
-- **RTMP** (`rtmp_listener.py`, `pipelines.py`): pyrtmp runs the RTMP server; the
-  reconstructed FLV is remuxed to MPEG-TS (codec copy) and pushed to OBS over SRT.
+- **Input** (`srt_listener.py`, `libsrt.py`): one libsrt listener socket per
+  port accepts many callers; the `streamid` carries the incoming stream key.
+  SRTLA arrives on an internal port fed by the Belabox `srtla_receiver` and is
+  otherwise plain SRT — only the reported protocol label differs.
+- **Relay** (`stream_relay.py`): reads MPEG-TS messages from the input socket
+  and hands each to the session's `OutputChannel` — verbatim, no remux.
+- **Output** (`output_router.py`): one shared SRT listener. An OBS Media Source
+  connects as a caller with an *output key* as its `streamid`; the router matches
+  it to the live stream's channel and attaches the socket. OBS connect/disconnect
+  is decoupled from the streamer's session.
 - **Auth** (`control_client.py`): every connect calls `POST /internal/authorize`
-  on the control plane with the stream key; rejection closes the connection.
+  with the incoming key; rejection closes the connection. The response carries
+  the session id and the output key(s) the channel is registered under.
 
 ## Config (env)
 
@@ -33,16 +39,14 @@ srtla_receiver ──SRT internal─► srt_listener (srtla)   ┘        │
 | `INGEST_CONTROL_SECRET` | — (required) | Shared secret for `/internal/*` |
 | `INGEST_SRT_PORT` | `8888` | Public SRT ingest (UDP) |
 | `INGEST_SRTLA_SRT_PORT` | `8889` | Internal SRT port fed by srtla_receiver |
-| `INGEST_RTMP_PORT` | `1935` | Public RTMP ingest (TCP) |
+| `INGEST_OUTPUT_PORT` | `9000` | SRT output OBS pulls from (UDP) |
+| `INGEST_SRT_LATENCY_MS` | `4000` | SRT receiver-buffer latency on every listener |
 | `INGEST_CONTROL_TIMEOUT` | `5` | Control-plane request timeout (s) |
 | `INGEST_LOG_LEVEL` | `INFO` | Log level |
 
 ## Validation status
 
-The control-plane auth flow and FLV/TS framing are deterministic and unit-checkable.
-The **GStreamer pipelines and the libsrt ctypes binding require on-hardware
-validation** (a running GStreamer + libsrt) — see the repo `docker/stream-server`
-compose stack and the end-to-end steps in the implementation plan. The libsrt
-accept/streamid path is the highest-risk piece; if it proves troublesome, the
-documented fallback is per-tenant SRT listener ports instead of shared-port
-streamid routing.
+The control-plane auth flow is deterministic and unit-checkable. The **libsrt
+ctypes binding (accept/streamid/recv/send) requires on-hardware validation** with
+a running libsrt — see `docker/stream-server`. The accept/streamid path on both
+the input and output listeners is the highest-risk piece.

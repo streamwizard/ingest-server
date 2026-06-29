@@ -6,6 +6,7 @@ Kept dependency-free (stdlib urllib) — the calls are tiny and infrequent
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import urllib.error
@@ -22,7 +23,10 @@ log = logging.getLogger(__name__)
 class Authorization:
     user_id: str
     session_id: str
-    output_target: str
+    # Output (OBS-side) keys this session's channel is registered under. An OBS
+    # Media Source presents one as its SRT streamid to pull the feed. May be
+    # empty — the stream is still ingested and its metrics still flow.
+    output_keys: tuple[str, ...]
 
 
 class ControlClient:
@@ -46,7 +50,7 @@ class ControlClient:
             # 403 = invalid key; any non-2xx means "do not accept this stream".
             log.info("control %s rejected: %s", path, exc.code)
             return None
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except (urllib.error.URLError, TimeoutError, http.client.RemoteDisconnected, ConnectionError) as exc:
             log.error("control %s unreachable: %s", path, exc)
             return None
 
@@ -62,7 +66,7 @@ class ControlClient:
             return Authorization(
                 user_id=data["user_id"],
                 session_id=data["session_id"],
-                output_target=data["output_target"],
+                output_keys=tuple(data.get("output_keys") or ()),
             )
         except KeyError:
             log.error("control authorize returned malformed body: %s", data)

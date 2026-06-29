@@ -5,8 +5,9 @@ listener can accept many concurrent callers, each carrying its own `streamid`.
 This is exactly how srt-live-server uses libsrt — we are *using* the C library's
 server API, not reimplementing the SRT protocol.
 
-Only the handful of functions we need are bound. The actual media relay is done
-by GStreamer (see pipelines.py); libsrt here is purely accept + streamid + recv.
+Only the handful of functions we need are bound. The relay is pure libsrt:
+accept + streamid + recv on the input, send on the output (see stream_relay.py
+and output_router.py) — no GStreamer.
 """
 
 from __future__ import annotations
@@ -24,6 +25,9 @@ SRT_INVALID_SOCK = -1
 # Socket options (from srt.h)
 SRTO_RCVSYN = 2          # bool: blocking recv
 SRTO_SNDSYN = 1          # bool: blocking send
+SRTO_LATENCY = 23        # int (ms): sets both RCV and PEER latency
+SRTO_RCVLATENCY = 43     # int (ms): receiver buffer latency
+SRTO_PEERLATENCY = 44    # int (ms): latency proposed to the peer
 SRTO_STREAMID = 46       # string: the streamid set by the caller
 SRTO_TRANSTYPE = 50      # enum: SRTT_LIVE = 0
 
@@ -137,8 +141,17 @@ class SRT_TRACEBSTATS(ctypes.Structure):
 
 
 def _load_libsrt() -> ctypes.CDLL:
-    name = ctypes.util.find_library("srt") or "libsrt.so.1"
-    lib = ctypes.CDLL(name)
+    name = ctypes.util.find_library("srt")
+    candidates = [name] if name else []
+    candidates += ["libsrt.so.1", "libsrt-openssl.so.1", "libsrt-gnutls.so.1.5", "libsrt-gnutls.so.1"]
+    for candidate in candidates:
+        try:
+            lib = ctypes.CDLL(candidate)
+            break
+        except OSError:
+            continue
+    else:
+        raise OSError(f"libsrt not found; tried: {candidates}")
 
     lib.srt_startup.restype = ctypes.c_int
     lib.srt_cleanup.restype = ctypes.c_int
@@ -155,6 +168,8 @@ def _load_libsrt() -> ctypes.CDLL:
     lib.srt_getsockflag.restype = ctypes.c_int
     lib.srt_recvmsg.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
     lib.srt_recvmsg.restype = ctypes.c_int
+    lib.srt_sendmsg.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+    lib.srt_sendmsg.restype = ctypes.c_int
     lib.srt_bstats.argtypes = [ctypes.c_int, ctypes.POINTER(SRT_TRACEBSTATS), ctypes.c_int]
     lib.srt_bstats.restype = ctypes.c_int
     lib.srt_close.argtypes = [ctypes.c_int]
@@ -179,14 +194,23 @@ def cleanup() -> None:
     _lib.srt_cleanup()
 
 
-def create_listener(port: int, backlog: int = 16) -> int:
-    """Create a bound, listening SRT socket on 0.0.0.0:port."""
+def create_listener(port: int, backlog: int = 16, latency_ms: int = 0) -> int:
+    """Create a bound, listening SRT socket on 0.0.0.0:port.
+
+    latency_ms (>0) sets SRTO_LATENCY before listen, so every accepted caller
+    inherits it. For SRTLA/cellular this should be a few seconds — the default
+    120ms turns ordinary jitter into dropped packets.
+    """
     sock = _lib.srt_create_socket()
     if sock == SRT_INVALID_SOCK:
         raise RuntimeError(f"srt_create_socket failed: {last_error()}")
 
     live = ctypes.c_int(SRTT_LIVE)
     _lib.srt_setsockflag(sock, SRTO_TRANSTYPE, ctypes.byref(live), ctypes.sizeof(live))
+
+    if latency_ms > 0:
+        lat = ctypes.c_int(latency_ms)
+        _lib.srt_setsockflag(sock, SRTO_LATENCY, ctypes.byref(lat), ctypes.sizeof(lat))
 
     addr = sockaddr_in()
     addr.sin_family = AF_INET
@@ -233,6 +257,11 @@ def recv(sock: int, length: int = 1500) -> bytes:
     return buf.raw[:n]
 
 
+def send(sock: int, data: bytes) -> bool:
+    """Send one message. Returns False if the peer's gone (broken/closed)."""
+    return _lib.srt_sendmsg(sock, data, len(data)) != SRT_ERROR
+
+
 def get_stats(sock: int, clear: bool = True) -> Optional[dict]:
     """Snapshot this connection's live quality stats (loss, RTT, bandwidth).
 
@@ -246,13 +275,29 @@ def get_stats(sock: int, clear: bool = True) -> Optional[dict]:
     if _lib.srt_bstats(sock, ctypes.byref(stats), 1 if clear else 0) == SRT_ERROR:
         return None
     return {
+        # Rates / link estimate
         "mbps_recv_rate": stats.mbpsRecvRate,
         "mbps_bandwidth": stats.mbpsBandwidth,
+        "mbps_max_bw": stats.mbpsMaxBW,
         "rtt_ms": stats.msRTT,
+        # Window counters (since last sample, clear=True) — pkt_recv is the
+        # denominator that turns the loss/drop/retrans counts into percentages.
+        "pkt_recv": stats.pktRecv,
         "pkt_recv_loss": stats.pktRcvLoss,
         "pkt_recv_drop": stats.pktRcvDrop,
         "pkt_recv_retrans": stats.pktRcvRetrans,
+        "pkt_recv_belated": stats.pktRcvBelated,
+        "pkt_recv_undecrypt": stats.pktRcvUndecrypt,
+        "pkt_reorder_distance": stats.pktReorderDistance,
+        # Receiver buffer health — the earliest warning of an about-to-stutter
+        # link (fills/drains before loss shows up).
+        "ms_rcv_buf": stats.msRcvBuf,
+        "byte_rcv_buf": stats.byteRcvBuf,
+        "pkt_flight_size": stats.pktFlightSize,
+        # Session totals
         "pkt_recv_loss_total": stats.pktRcvLossTotal,
+        "pkt_recv_drop_total": stats.pktRcvDropTotal,
+        "pkt_recv_undecrypt_total": stats.pktRcvUndecryptTotal,
         "byte_recv_total": stats.byteRecvTotal,
     }
 

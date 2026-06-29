@@ -34,6 +34,22 @@ export async function touchStreamKey(client: DBClient, streamKey: string): Promi
     .eq("stream_key", streamKey);
 }
 
+/**
+ * Active output (OBS-side) keys paired with an incoming stream key. Returned by
+ * authorize so the media plane can register the session's output channel under
+ * each key; an OBS Media Source presents one of these as its SRT streamid to
+ * pull the feed. Usually one, but a stream may fan out to several OBS pulls.
+ */
+export async function getOutputKeysForKey(client: DBClient, keyId: string): Promise<string[]> {
+  const { data } = await client
+    .from("ingest_output_keys")
+    .select("output_key")
+    .eq("key_id", keyId)
+    .eq("is_active", true);
+
+  return data?.map((row) => row.output_key) ?? [];
+}
+
 export interface IngestSessionInsert {
   user_id: string;
   key_id: string;

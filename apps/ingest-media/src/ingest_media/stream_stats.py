@@ -1,8 +1,8 @@
-"""Protocol-agnostic throughput tracking, shared by both relay types.
+"""Throughput tracking for the relay.
 
-This is the one signal available regardless of input protocol (RTMP has no
-transport-level stats we can read; SRT does — see libsrt.get_stats — so SRT
-sessions report both this and the richer SRT stats).
+Reports our own byte-counted bitrate; the richer transport stats (loss, RTT,
+receiver-buffer fill) come from SRT itself — see libsrt.get_stats — and are
+merged in alongside this on each sample.
 """
 
 from __future__ import annotations

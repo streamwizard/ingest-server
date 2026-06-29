@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "dev": "doppler run --config dev_ingest_control -- bun --preload ./src/sentry.ts --hot src/index.ts",
+    "dev": "doppler run -- bun --preload ./src/sentry.ts --hot src/index.ts",
     "start": "bun --preload ./src/sentry.ts src/index.ts",
     "check-types": "tsc --noEmit"
   },

@@ -2,7 +2,6 @@ import { type Context } from "hono";
 import { z } from "zod";
 import { supabase } from "@repo/supabase";
 import { endIngestSession } from "@repo/supabase/queries/ingest";
-import { deprovisionObs, isObsPushMode } from "../obs/provisioner";
 import { clearSessionStats } from "./session-stats";
 
 const bodySchema = z.object({
@@ -15,7 +14,8 @@ const bodySchema = z.object({
  * POST /internal/session-end
  *
  * Called by the media plane when a streamer disconnects. Closes the session row
- * and tears down the streamer's OBS container.
+ * and drops the cached live stats. (The media plane owns the output channel and
+ * tears it down on its side.)
  */
 export async function sessionEndHandler(c: Context) {
   let body: z.infer<typeof bodySchema>;
@@ -30,14 +30,6 @@ export async function sessionEndHandler(c: Context) {
     console.error(`[session-end] failed to close session ${body.session_id}:`, error);
   }
   clearSessionStats(body.session_id);
-
-  if (isObsPushMode()) {
-    try {
-      await deprovisionObs(body.user_id);
-    } catch (err) {
-      console.error(`[session-end] OBS deprovisioning failed for ${body.user_id}:`, err);
-    }
-  }
 
   return c.json({ ok: true });
 }
