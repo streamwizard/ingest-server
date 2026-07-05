@@ -263,10 +263,39 @@ print(json.dumps({
 }))
 " "$TOKEN" "$CPU_CORES" "$RAM_TOTAL_MB" "$STORAGE_TOTAL_MB" "$PUBLIC_IP" "$LAN_IP" "$TAILSCALE_IP")"
 
-  CLAIM_RESPONSE="$(curl_with_backoff -fsSL -X POST "$REST_API_URL/api/ingest-nodes/claim" \
-    -H "Content-Type: application/json" \
-    -d "$CLAIM_BODY")" \
-    || die "Node claim request to $REST_API_URL failed after retries. Check the URL/token and that rest-api's /api/ingest-nodes/claim endpoint exists (see docs/PANEL_INTEGRATION.md)."
+  # Not -f: a 4xx here carries a JSON {"error": "..."} body from rest-api
+  # (invalid/expired/already-claimed token) that we want to surface verbatim
+  # instead of curl swallowing it and leaving just an opaque exit code 22.
+  claim_attempt=1
+  claim_max_attempts=10
+  claim_delay=1
+  while true; do
+    CLAIM_RAW="$(curl -sS -w '\n%{http_code}' -X POST "$REST_API_URL/api/ingest-nodes/claim" \
+      -H "Content-Type: application/json" \
+      -d "$CLAIM_BODY")"
+    CLAIM_HTTP_STATUS="${CLAIM_RAW##*$'\n'}"
+    CLAIM_RESPONSE="${CLAIM_RAW%$'\n'*}"
+
+    [ "$CLAIM_HTTP_STATUS" = "200" ] && break
+
+    # Client errors (bad/expired/used token, malformed request) won't be
+    # fixed by retrying -- fail fast with the panel's own error message
+    # instead of burning ~17 minutes of backoff on a dead token.
+    case "$CLAIM_HTTP_STATUS" in
+      4[0-9][0-9])
+        CLAIM_ERROR="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('error','unknown error'))" "$CLAIM_RESPONSE" 2>/dev/null || echo "$CLAIM_RESPONSE")"
+        die "Node claim rejected by panel (HTTP $CLAIM_HTTP_STATUS): $CLAIM_ERROR"
+        ;;
+    esac
+
+    if [ "$claim_attempt" -ge "$claim_max_attempts" ]; then
+      die "Node claim request to $REST_API_URL failed after $claim_max_attempts attempts (last status: $CLAIM_HTTP_STATUS). Check the URL and that rest-api's /api/ingest-nodes/claim endpoint exists (see docs/PANEL_INTEGRATION.md)."
+    fi
+    warn "Node claim request failed (HTTP $CLAIM_HTTP_STATUS, attempt $claim_attempt/$claim_max_attempts), retrying in ${claim_delay}s..."
+    sleep "$claim_delay"
+    claim_attempt=$((claim_attempt + 1))
+    claim_delay=$((claim_delay * 2))
+  done
 
   if [ "$TAILSCALE_JOIN_DEFERRED" = "true" ]; then
     CLAIM_TAILSCALE_AUTHKEY="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('tailscale_authkey') or '')" "$CLAIM_RESPONSE")"
