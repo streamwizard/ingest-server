@@ -303,7 +303,21 @@ print(json.dumps({
       log "Bringing Tailscale up using the panel-minted key..."
       tailscale up --authkey="$CLAIM_TAILSCALE_AUTHKEY" --ssh
       TAILSCALE_IP="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
-      [ -n "$TAILSCALE_IP" ] && log "Tailscale IP: $TAILSCALE_IP" || warn "Joined Tailscale but couldn't read back an IP."
+      if [ -n "$TAILSCALE_IP" ]; then
+        log "Tailscale IP: $TAILSCALE_IP"
+        # /claim already ran and couldn't have known this IP (the auth key
+        # used above came back IN that response), so report it back now via
+        # its own authenticated round trip instead.
+        NODE_API_KEY="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node_api_key'])" "$CLAIM_RESPONSE")"
+        REPORT_BODY="$(python3 -c "import json,sys; print(json.dumps({'tailscale_ip': sys.argv[1]}))" "$TAILSCALE_IP")"
+        REPORT_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X PATCH "$REST_API_URL/api/ingest-nodes/me" \
+          -H "Authorization: Bearer $NODE_API_KEY" \
+          -H "Content-Type: application/json" \
+          -d "$REPORT_BODY")"
+        [ "$REPORT_STATUS" = "200" ] || warn "Reported Tailscale IP to panel but got HTTP $REPORT_STATUS back; the panel's node record may still show no Tailscale IP."
+      else
+        warn "Joined Tailscale but couldn't read back an IP."
+      fi
       add_tailscale_output_rule || warn "tailscale0 still not present after 'tailscale up'; add the :9000 rule manually: ufw allow in on tailscale0 to any port 9000 proto udp"
     else
       warn "Claim response did not include a Tailscale auth key (Tailscale API may be unreachable or misconfigured on the panel side). Run 'tailscale up' yourself, then: ufw allow in on tailscale0 to any port 9000 proto udp"
