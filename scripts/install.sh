@@ -374,7 +374,7 @@ chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 
 log "Building images as $SERVICE_USER..."
-sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose -f '$COMPOSE_FILE' build"
+sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose -f '$COMPOSE_FILE' --env-file '$ENV_FILE' build"
 
 ENV_COMPLETE="true"
 for key in SUPABASE_URL SUPABASE_SECRET_KEY INGEST_CONTROL_SECRET INGEST_CONTROL_URL; do
@@ -384,13 +384,13 @@ done
 if [ "$DO_START" = "true" ]; then
   if [ "$ENV_COMPLETE" = "true" ]; then
     log "Starting the stack..."
-    sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose -f '$COMPOSE_FILE' up -d"
+    sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose -f '$COMPOSE_FILE' --env-file '$ENV_FILE' up -d"
   else
-    warn "--start was given but $ENV_FILE is missing required values; not starting. Fill it in and run: sudo -u $SERVICE_USER bash -c 'cd $REPO_DIR && docker compose -f $COMPOSE_FILE up -d'"
+    warn "--start was given but $ENV_FILE is missing required values; not starting. Fill it in and run: sudo -u $SERVICE_USER bash -c 'cd $REPO_DIR && docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d'"
   fi
 else
   log "Build complete. Not starting (pass --start to bring the stack up automatically)."
-  log "To start manually: sudo -u $SERVICE_USER bash -c 'cd $REPO_DIR && docker compose -f $COMPOSE_FILE up -d'"
+  log "To start manually: sudo -u $SERVICE_USER bash -c 'cd $REPO_DIR && docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d'"
 fi
 
 log "Done."
