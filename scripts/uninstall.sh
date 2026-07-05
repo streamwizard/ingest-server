@@ -78,7 +78,7 @@ set -euo pipefail
 
 REPO_DIR="/opt/ingest-server"
 SERVICE_USER="ingest"
-COMPOSE_FILE="docker/stream-server/docker-compose.yml"
+COMPOSE_FILE="docker-compose.yml"
 NETWORK_NAME="stream-server"
 KEEP_USER="false"
 REMOVE_UFW_RULES="false"

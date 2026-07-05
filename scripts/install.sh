@@ -229,6 +229,13 @@ curl_with_backoff -fsSL -o "$TMP_COMPOSE" \
 # a same-directory .env instead of preserving the nesting.
 sed 's#\.\./\.\./\.env#.env#' "$TMP_COMPOSE" > "$REPO_DIR/docker-compose.yml"
 rm -f "$TMP_COMPOSE"
+
+# So a later teardown doesn't need network access to fetch this again --
+# it's just sitting right next to the compose file and .env it operates on.
+curl_with_backoff -fsSL -o "$REPO_DIR/uninstall.sh" "$RAW_BASE/$REF/scripts/uninstall.sh" \
+  || warn "Failed to fetch uninstall.sh; to uninstall later, fetch it manually from $RAW_BASE/$REF/scripts/uninstall.sh"
+chmod +x "$REPO_DIR/uninstall.sh" 2>/dev/null || true
+
 chown -R "$SERVICE_USER:$SERVICE_USER" "$REPO_DIR"
 
 COMPOSE_FILE="docker-compose.yml"
