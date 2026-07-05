@@ -33,7 +33,7 @@ jobs:
             dockerfile: apps/ingest-media/Dockerfile
           - image: srtla-receiver
             context: docker/stream-server/srtla
-            dockerfile: Dockerfile
+            dockerfile: docker/stream-server/srtla/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
