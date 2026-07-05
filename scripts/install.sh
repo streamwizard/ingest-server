@@ -218,16 +218,20 @@ fi
 usermod -aG docker "$SERVICE_USER"
 
 log "Fetching node config files (ref: $REF)..."
-mkdir -p "$REPO_DIR/docker/stream-server"
-curl_with_backoff -fsSL -o "$REPO_DIR/docker/stream-server/docker-compose.yml" \
+mkdir -p "$REPO_DIR"
+TMP_COMPOSE="$(mktemp)"
+curl_with_backoff -fsSL -o "$TMP_COMPOSE" \
   "$RAW_BASE/$REF/docker/stream-server/docker-compose.yml" \
   || die "Failed to fetch docker-compose.yml from ref '$REF'. Check the --ref value and your network connection."
+# The checked-in file's env_file (../../.env) is relative to its nested repo
+# location (docker/stream-server/docker-compose.yml); a node just gets the
+# one flat file with no repo structure around it, so rewrite that path to
+# a same-directory .env instead of preserving the nesting.
+sed 's#\.\./\.\./\.env#.env#' "$TMP_COMPOSE" > "$REPO_DIR/docker-compose.yml"
+rm -f "$TMP_COMPOSE"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$REPO_DIR"
 
-COMPOSE_FILE="docker/stream-server/docker-compose.yml"
-# The compose file's env_file (../../.env) resolves relative to the compose
-# file's own directory, so the working .env must live at the repo root --
-# not inside docker/stream-server/ -- regardless of where commands are run from.
+COMPOSE_FILE="docker-compose.yml"
 ENV_FILE="$REPO_DIR/.env"
 
 if [ -n "$REST_API_URL" ] && [ -n "$TOKEN" ]; then
