@@ -137,6 +137,22 @@ apt-get update -qq
 command -v curl >/dev/null || apt-get install -y --no-install-recommends curl >/dev/null
 command -v ufw >/dev/null || apt-get install -y --no-install-recommends ufw >/dev/null
 
+# Some VPS providers hand out flaky or no DNS at all via DHCP -- give the box
+# a known-good resolver from minute one instead of trusting whatever the
+# provider's network config happens to supply.
+if command -v systemctl >/dev/null && systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+  log "Setting default DNS to Cloudflare (1.1.1.1, 1.0.0.1)..."
+  mkdir -p /etc/systemd/resolved.conf.d
+  cat > /etc/systemd/resolved.conf.d/99-streamwizard-dns.conf <<'EOF'
+[Resolve]
+DNS=1.1.1.1 1.0.0.1
+FallbackDNS=8.8.8.8 8.8.4.4
+EOF
+  systemctl restart systemd-resolved
+else
+  warn "systemd-resolved not detected; skipping the Cloudflare DNS baseline (leaving whatever resolver the OS already has)."
+fi
+
 log "Checking Tailscale..."
 if ! command -v tailscale >/dev/null; then
   log "Installing Tailscale..."
