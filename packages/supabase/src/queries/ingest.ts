@@ -9,22 +9,29 @@ export type IngestProtocol = "rtmp" | "srt" | "srtla";
 export interface StreamKeyOwner {
   user_id: string;
   key_id: string;
+  label: string;
 }
 
 /**
  * Validate a stream key and return its owner. Used by the ingest control plane
  * on every connect. Mirrors getIrlCollectorTokenUserId in ./irl.ts.
+ *
+ * `label` is the durable, user-assigned name for this key (e.g. "Camera 1") —
+ * a user can have multiple active stream keys, so this is what lets metrics
+ * and dashboards distinguish a user's simultaneous incoming signals across
+ * reconnects, where `session_id` alone would only identify the current
+ * connection.
  */
 export async function getStreamKeyOwner(client: DBClient, streamKey: string): Promise<StreamKeyOwner | null> {
   const { data } = await client
     .from("ingest_stream_keys")
-    .select("id, user_id")
+    .select("id, user_id, label")
     .eq("stream_key", streamKey)
     .eq("is_active", true)
     .maybeSingle();
 
   if (!data) return null;
-  return { user_id: data.user_id, key_id: data.id };
+  return { user_id: data.user_id, key_id: data.id, label: data.label };
 }
 
 export async function touchStreamKey(client: DBClient, streamKey: string): Promise<void> {

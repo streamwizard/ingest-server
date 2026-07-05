@@ -68,6 +68,16 @@ export interface SessionStatsEntry {
 // accumulates — and entries are removed at session-end.
 const latestStats = new Map<string, SessionStatsEntry>();
 
+// session_id -> the stream key (durable "camera" identity) this session was
+// authorized under. Populated by authorizeHandler, read here to tag InfluxDB
+// points, removed at session-end — mirrors latestStats' lifecycle so the two
+// maps never drift out of sync.
+const sessionKeys = new Map<string, { streamKeyId: string; label: string }>();
+
+export function registerSessionKey(sessionId: string, streamKeyId: string, label: string): void {
+  sessionKeys.set(sessionId, { streamKeyId, label });
+}
+
 // Durable history is batched, not written per-sample: every report lands here
 // first, and a timer below bulk-inserts + clears this on a fixed interval.
 // Deliberately dropped (not retried) on insert failure — a metrics pipeline
@@ -95,6 +105,7 @@ export function startSessionStatsFlusher(): void {
 
 export function clearSessionStats(sessionId: string): void {
   latestStats.delete(sessionId);
+  sessionKeys.delete(sessionId);
 }
 
 /**
@@ -123,7 +134,14 @@ export async function sessionStatsHandler(c: Context) {
 
   // Time-series: full sample (raw + derived) → InfluxDB. Per-stream timelines
   // and the cross-stream "global" view are both just queries over these points.
-  trackIngestStreamSample(body.session_id, body.user_id, body.protocol, fullStats);
+  const streamKey = sessionKeys.get(body.session_id);
+  trackIngestStreamSample(
+    body.session_id,
+    body.user_id,
+    body.protocol,
+    fullStats,
+    streamKey ? { streamKeyId: streamKey.streamKeyId, label: streamKey.label } : undefined,
+  );
 
   // Durable record: only the columns that exist on ingest_session_stats. The
   // richer transport fields live in InfluxDB; this stays a stable session log.

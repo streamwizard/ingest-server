@@ -36,16 +36,31 @@ export interface IngestStreamSample {
   retrans_pct?: number;
 }
 
+export interface IngestStreamKeyInfo {
+  streamKeyId: string;
+  label: string;
+}
+
 export function trackIngestStreamSample(
   sessionId: string,
   userId: string,
   protocol: string,
   sample: IngestStreamSample,
+  streamKey?: IngestStreamKeyInfo,
 ): void {
   const point = new Point("ingest_stream")
     .tag("session_id", sessionId)
     .tag("user_id", userId)
     .tag("protocol", protocol);
+
+  // stream_key_id is the durable identity of a user's incoming signal (e.g.
+  // one of several cameras) across reconnects — session_id alone only
+  // identifies the current connection. label is a mutable display name, so it
+  // goes in as a field rather than a tag (tags should stay stable/low-cardinality).
+  if (streamKey) {
+    point.tag("stream_key_id", streamKey.streamKeyId);
+    point.stringField("label", streamKey.label);
+  }
 
   for (const [key, value] of Object.entries(sample)) {
     if (typeof value === "number" && Number.isFinite(value)) {

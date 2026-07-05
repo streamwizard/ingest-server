@@ -2,6 +2,7 @@ import { type Context } from "hono";
 import { z } from "zod";
 import { supabase } from "@repo/supabase";
 import { getStreamKeyOwner, touchStreamKey, insertIngestSession, getOutputKeysForKey } from "@repo/supabase/queries/ingest";
+import { registerSessionKey } from "./session-stats";
 
 const bodySchema = z.object({
   protocol: z.enum(["rtmp", "srt", "srtla"]),
@@ -53,6 +54,8 @@ export async function authorizeHandler(c: Context) {
   if (error || !session) {
     return c.json({ error: "Failed to open session" }, 500);
   }
+
+  registerSessionKey(session.id, owner.key_id, owner.label);
 
   const outputKeys = await getOutputKeysForKey(supabase, owner.key_id);
 

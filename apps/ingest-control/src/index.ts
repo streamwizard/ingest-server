@@ -11,6 +11,7 @@ import { authorizeHandler } from "./routes/authorize";
 import { sessionEndHandler } from "./routes/session-end";
 import { sessionStatsHandler, getSessionStatsHandler, startSessionStatsFlusher } from "./routes/session-stats";
 import { wsBroadcastClient } from "./lib/ws-broadcast";
+import { startSystemMetricsSampler } from "./services/system-metrics-sampler";
 
 const app = new Hono();
 
@@ -38,6 +39,7 @@ app.get("/internal/session-stats/:sessionId", getSessionStatsHandler);
 
 startSessionStatsFlusher();
 wsBroadcastClient.connect();
+startSystemMetricsSampler(env.INGEST_NODE_ID);
 
 Bun.serve({
   fetch: app.fetch,

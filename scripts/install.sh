@@ -1,0 +1,367 @@
+#!/usr/bin/env bash
+#
+#                   .++==++-.
+#                  -*-    .-++.
+#                .*+         :*=
+#               +*:            #-
+#             =*-              :%
+#          .=*=                 *=
+#       .-==:    .:-++.         .%
+#   .-+#*=-.:-====--%            ++
+#   .:-------:.     #:            %.
+#                   #-            =*
+#                  .#              #.
+#                  +:              :+
+#                 --                =.
+#                .:                  :
+#    ..:::..                             ...
+# -==-::.                                 ..:---.
+# *+:.                                        .:=+-
+#  .-=====--::...                                .+%
+#        ..::--===========-------------------=====-.
+#                       ....:::::::::::.::....
+#           --:::                     .::.=.
+#           == .+:     .::-::-:      :+. :+
+#            +   --:.:--:  .. :--:..-=  .+
+#            .+    ::.           .::.  .+
+#             -=                       +.
+#              -=                     +.
+#               :=                .  +.
+#                .=*-             *-+.
+#                  :+.            -=
+#                   :*+.          =:
+#                    :+.         =-
+#                    .=       + =-
+#                    -=      =-*-
+#                     +     +. .
+#                     .+.  :=
+#                      .=- +.
+#                        :-*
+#
+#  ___ _                   __      ___                _ 
+# / __| |_ _ _ ___ __ _ _ _\ \    / (_)_____ _ _ _ __| |
+# \__ \  _| '_/ -_) _` | '  \ \/\/ /| |_ / _` | '_/ _` |
+# |___/\__|_| \___\__,_|_|_|_\_/\_/ |_/__\__,_|_| \__,_|
+#
+#
+# ingest-server node installer (Wings-style, mirroring obs-instance-manager's
+# scripts/install.sh).
+#
+# Provisions an Ubuntu VPS to run ingest-control + ingest-media + the SRTLA
+# receiver as a dedicated service account, then either links the node to a
+# panel (if --rest-api-url/--token are given) or scaffolds a local .env for
+# manual setup. See docs/PANEL_INTEGRATION.md for the linking contract.
+#
+# Usage:
+#   sudo bash install.sh [options]
+#
+# Options:
+#   --rest-api-url=URL         Panel's rest-api base URL, e.g. https://api.example.com
+#   --token=TOKEN              One-time node claim token issued by the panel
+#   --tailscale-authkey=KEY    Tailscale auth key for headless `tailscale up`. Only needed for a
+#                              manual/no-panel setup (no --rest-api-url/--token) -- when doing a
+#                              full claim, the panel mints a single-use key for you automatically
+#                              and this flag is ignored. Generate one at
+#                              https://login.tailscale.com/admin/settings/keys if you need it.
+#   --ssh-cidr=CIDR            Source CIDR allowed to reach SSH (default: 0.0.0.0/0 -- this is a
+#                              public VPS, not a LAN box; narrow this if you can)
+#   --public-ip=IP             Manual override for the self-reported public IP (default: autodetect)
+#   --repo-url=URL             Git URL to clone (default: streamwizard/ingest-server on GitHub)
+#   --repo-dir=DIR             Install directory (default: /opt/ingest-server)
+#   --service-user=NAME        Dedicated service account to run containers as (default: ingest)
+#   --start                    Bring the stack up at the end (default: build only)
+#   -h, --help                 Show this help
+
+set -euo pipefail
+
+REST_API_URL=""
+TOKEN=""
+TAILSCALE_AUTHKEY=""
+SSH_CIDR="0.0.0.0/0"
+PUBLIC_IP_OVERRIDE=""
+REPO_URL="https://github.com/streamwizard/ingest-server.git"
+REPO_DIR="/opt/ingest-server"
+SERVICE_USER="ingest"
+DO_START="false"
+
+log()  { echo "[streamwizard] [install] $*"; }
+warn() { echo "[streamwizard] [install] WARNING: $*" >&2; }
+die()  { echo "[streamwizard] [install] ERROR: $*" >&2; exit 1; }
+
+# Retries a curl call with exponential backoff (1s, 2s, 4s, ... up to 10 tries),
+# the same resilience obs-instance-manager applies to its own outbound panel
+# calls so a transient network blip during linking doesn't fail the whole install.
+curl_with_backoff() {
+  local attempt=1 max_attempts=10 delay=1
+  while true; do
+    if curl "$@"; then return 0; fi
+    if [ "$attempt" -ge "$max_attempts" ]; then return 1; fi
+    warn "Request failed (attempt $attempt/$max_attempts), retrying in ${delay}s..."
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    --rest-api-url=*) REST_API_URL="${arg#*=}" ;;
+    --token=*) TOKEN="${arg#*=}" ;;
+    --tailscale-authkey=*) TAILSCALE_AUTHKEY="${arg#*=}" ;;
+    --ssh-cidr=*) SSH_CIDR="${arg#*=}" ;;
+    --public-ip=*) PUBLIC_IP_OVERRIDE="${arg#*=}" ;;
+    --repo-url=*) REPO_URL="${arg#*=}" ;;
+    --repo-dir=*) REPO_DIR="${arg#*=}" ;;
+    --service-user=*) SERVICE_USER="${arg#*=}" ;;
+    --start) DO_START="true" ;;
+    -h|--help) sed -n '47,73p' "$0"; exit 0 ;;
+    *) die "Unknown option: $arg" ;;
+  esac
+done
+
+[ "$(id -u)" -eq 0 ] || die "Must run as root (sudo bash install.sh ...)"
+
+if [ "$SSH_CIDR" = "0.0.0.0/0" ]; then
+  warn "SSH is open to 0.0.0.0/0 (the default). Pass --ssh-cidr=<your IP>/32 to restrict it."
+fi
+
+log "Installing baseline packages..."
+apt-get update -qq
+command -v curl >/dev/null || apt-get install -y --no-install-recommends curl >/dev/null
+command -v git >/dev/null || apt-get install -y --no-install-recommends git >/dev/null
+command -v ufw >/dev/null || apt-get install -y --no-install-recommends ufw >/dev/null
+
+log "Checking Tailscale..."
+if ! command -v tailscale >/dev/null; then
+  log "Installing Tailscale..."
+  curl -fsSL https://tailscale.com/install.sh | sh
+else
+  log "Tailscale already installed."
+fi
+
+# Whether we defer bringing Tailscale up until after claiming (so we can use
+# the panel-minted key from the claim response instead of a manually-supplied
+# one). Only relevant when doing a full claim; a manual/no-panel run either
+# has a --tailscale-authkey to use right now or doesn't get Tailscale at all.
+TAILSCALE_JOIN_DEFERRED="false"
+if ! tailscale status >/dev/null 2>&1; then
+  if [ -n "$TAILSCALE_AUTHKEY" ]; then
+    log "Bringing Tailscale up..."
+    tailscale up --authkey="$TAILSCALE_AUTHKEY" --ssh
+  elif [ -n "$REST_API_URL" ] && [ -n "$TOKEN" ]; then
+    log "No --tailscale-authkey given; will join Tailscale using the key returned by the claim response."
+    TAILSCALE_JOIN_DEFERRED="true"
+  else
+    warn "Tailscale isn't up and no --tailscale-authkey was given. Skipping automated setup -- run 'tailscale up' yourself, then re-run this installer (or manually set TAILSCALE_IP in .env and add the tailscale0 ufw rule below)."
+  fi
+else
+  log "Tailscale already up."
+fi
+
+TAILSCALE_IP="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
+if [ -n "$TAILSCALE_IP" ]; then
+  log "Tailscale IP: $TAILSCALE_IP"
+elif [ "$TAILSCALE_JOIN_DEFERRED" != "true" ]; then
+  warn "No Tailscale IP available yet."
+fi
+
+log "Checking Docker..."
+if ! command -v docker >/dev/null; then
+  log "Installing Docker via get.docker.com..."
+  curl -fsSL https://get.docker.com | sh
+else
+  log "Docker already installed ($(docker --version))."
+fi
+systemctl enable --now docker >/dev/null
+
+# Port 9000 (the SRT output OBS pulls from) must be reachable ONLY via
+# Tailscale, never publicly -- mirrors the compose file's
+# ${TAILSCALE_IP}:9000 binding rather than a 0.0.0.0:9000 publish. No rule is
+# ever added for it on the public interface. ingest-control's own HTTP port
+# is never published by docker-compose at all, so `default deny incoming`
+# already covers it with no rule needed.
+#
+# Extracted into a function (rather than inlined once) because when the
+# Tailscale join is deferred to after claiming, tailscale0 doesn't exist yet
+# at the point ufw is first configured -- this gets called again once the
+# interface shows up, later in the claim block. The status-grep guard makes
+# a second call a no-op instead of adding a duplicate rule.
+add_tailscale_output_rule() {
+  ip link show tailscale0 >/dev/null 2>&1 || return 1
+  ufw status | grep -qi "9000.*tailscale0\|tailscale0.*9000" && return 0
+  ufw allow in on tailscale0 to any port 9000 proto udp comment "SRT output (tailscale only)" >/dev/null
+  log "Opened the tailscale-only ufw rule for port 9000."
+}
+
+log "Configuring ufw (SSH from $SSH_CIDR, public SRT ingest on 8888/udp, public SRTLA on 5000/udp, tailscale-only SRT output on 9000/udp)..."
+ufw default deny incoming >/dev/null
+ufw default allow outgoing >/dev/null
+ufw allow from "$SSH_CIDR" to any port 22 proto tcp comment "SSH" >/dev/null
+ufw allow proto udp to any port 8888 comment "SRT ingest (public)" >/dev/null
+ufw allow proto udp to any port 5000 comment "SRTLA ingest (public)" >/dev/null
+if ! add_tailscale_output_rule; then
+  warn "tailscale0 interface not present yet; skipping the :9000 tailscale-only rule for now. It will be added automatically once Tailscale comes up (either below, after claiming, or the next time you run this script)."
+fi
+ufw --force enable >/dev/null
+ufw status verbose
+
+log "Creating service account '$SERVICE_USER'..."
+if ! id "$SERVICE_USER" >/dev/null 2>&1; then
+  useradd -m -d "/home/$SERVICE_USER" -s /usr/sbin/nologin -c "Service account for ingest-server" "$SERVICE_USER"
+fi
+usermod -aG docker "$SERVICE_USER"
+
+log "Fetching ingest-server into $REPO_DIR..."
+if [ -d "$REPO_DIR/.git" ]; then
+  warn "$REPO_DIR already exists; leaving it as-is. Update it yourself (git pull) if you want the latest source."
+else
+  git clone "$REPO_URL" "$REPO_DIR"
+fi
+chown -R "$SERVICE_USER:$SERVICE_USER" "$REPO_DIR"
+
+COMPOSE_FILE="docker/stream-server/docker-compose.yml"
+# The compose file's env_file (../../.env) resolves relative to the compose
+# file's own directory, so the working .env must live at the repo root --
+# not inside docker/stream-server/ -- regardless of where commands are run from.
+ENV_FILE="$REPO_DIR/.env"
+
+if [ -n "$REST_API_URL" ] && [ -n "$TOKEN" ]; then
+  log "Linking to panel via rest-api at $REST_API_URL..."
+  CPU_CORES="$(nproc)"
+  RAM_TOTAL_MB="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
+  STORAGE_TOTAL_MB="$(df -BM --output=size / | tail -n1 | tr -dc '0-9')"
+
+  if [ -n "$PUBLIC_IP_OVERRIDE" ]; then
+    PUBLIC_IP="$PUBLIC_IP_OVERRIDE"
+  else
+    PUBLIC_IP="$(curl -fsSL --max-time 5 https://ifconfig.me 2>/dev/null || true)"
+    [ -n "$PUBLIC_IP" ] || PUBLIC_IP="$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+    [ -n "$PUBLIC_IP" ] || warn "Could not autodetect a public IP; leaving it blank. Pass --public-ip to set it manually (informational only, never used for firewall rules)."
+  fi
+
+  # Primary NIC's own address -- on most VPS providers this is the same as
+  # PUBLIC_IP (no NAT in front of the box), but on providers with a distinct
+  # private network (e.g. Hetzner Cloud Networks) it's the private-network
+  # address instead. Excludes tailscale0 so its 100.64.0.0/10 address never
+  # gets picked up here by accident. Purely informational, like public_ip.
+  LAN_IP="$(ip -o -4 addr show scope global | grep -v ' tailscale0 ' | head -n1 | awk '{print $4}' | cut -d/ -f1)"
+  [ -n "$LAN_IP" ] || warn "Could not detect a LAN IP on the primary interface; leaving it blank."
+
+  # Built via argv (not string-interpolated into the python source) so a
+  # token containing quotes can't break the JSON encoding.
+  CLAIM_BODY="$(python3 -c "
+import json, sys
+token, cpu_cores, ram_total_mb, storage_total_mb, public_ip, lan_ip, tailscale_ip = sys.argv[1:8]
+print(json.dumps({
+    'token': token,
+    'cpu_cores': int(cpu_cores),
+    'ram_total_mb': int(ram_total_mb),
+    'storage_total_mb': int(storage_total_mb),
+    'public_ip': public_ip or None,
+    'lan_ip': lan_ip or None,
+    'tailscale_ip': tailscale_ip or None,
+}))
+" "$TOKEN" "$CPU_CORES" "$RAM_TOTAL_MB" "$STORAGE_TOTAL_MB" "$PUBLIC_IP" "$LAN_IP" "$TAILSCALE_IP")"
+
+  CLAIM_RESPONSE="$(curl_with_backoff -fsSL -X POST "$REST_API_URL/api/ingest-nodes/claim" \
+    -H "Content-Type: application/json" \
+    -d "$CLAIM_BODY")" \
+    || die "Node claim request to $REST_API_URL failed after retries. Check the URL/token and that rest-api's /api/ingest-nodes/claim endpoint exists (see docs/PANEL_INTEGRATION.md)."
+
+  if [ "$TAILSCALE_JOIN_DEFERRED" = "true" ]; then
+    CLAIM_TAILSCALE_AUTHKEY="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('tailscale_authkey') or '')" "$CLAIM_RESPONSE")"
+    if [ -n "$CLAIM_TAILSCALE_AUTHKEY" ]; then
+      log "Bringing Tailscale up using the panel-minted key..."
+      tailscale up --authkey="$CLAIM_TAILSCALE_AUTHKEY" --ssh
+      TAILSCALE_IP="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
+      [ -n "$TAILSCALE_IP" ] && log "Tailscale IP: $TAILSCALE_IP" || warn "Joined Tailscale but couldn't read back an IP."
+      add_tailscale_output_rule || warn "tailscale0 still not present after 'tailscale up'; add the :9000 rule manually: ufw allow in on tailscale0 to any port 9000 proto udp"
+    else
+      warn "Claim response did not include a Tailscale auth key (Tailscale API may be unreachable or misconfigured on the panel side). Run 'tailscale up' yourself, then: ufw allow in on tailscale0 to any port 9000 proto udp"
+    fi
+  fi
+
+  python3 - "$ENV_FILE" "$CLAIM_RESPONSE" "$TAILSCALE_IP" <<'PY'
+import json, sys
+env_path, raw, tailscale_ip = sys.argv[1], sys.argv[2], sys.argv[3]
+data = json.loads(raw)
+with open(env_path, "w") as f:
+    f.write("NODE_ENV=production\n")
+    f.write(f"SUPABASE_URL={data['supabase_url']}\n")
+    f.write(f"SUPABASE_SECRET_KEY={data['supabase_secret_key']}\n")
+    f.write(f"INGEST_CONTROL_SECRET={data['ingest_control_secret']}\n")
+    f.write("PORT=8090\n")
+    f.write("INGEST_CONTROL_URL=http://ingest-control:8090\n")
+    f.write("INGEST_SRT_PORT=8888\n")
+    f.write("INGEST_SRTLA_SRT_PORT=8889\n")
+    f.write("INGEST_OUTPUT_PORT=9000\n")
+    f.write("INGEST_SRT_LATENCY_MS=4000\n")
+    f.write("INGEST_CONTROL_TIMEOUT=5\n")
+    f.write("INGEST_LOG_LEVEL=INFO\n")
+    f.write(f"TAILSCALE_IP={tailscale_ip}\n")
+    f.write("WS_SERVER_URL=\n")
+    f.write("INFLUXDB_URL=\n")
+    f.write("INFLUXDB_TOKEN=\n")
+    f.write("INFLUXDB_ORG=\n")
+    f.write("INFLUXDB_BUCKET=\n")
+    f.write("SENTRY_DSN=\n")
+    f.write("SENTRY_RELEASE=\n")
+    # Not consumed by anything yet -- written for forward-compat with a
+    # future ingest-node-authenticated heartbeat/reconcile endpoint.
+    f.write(f"NODE_ID={data['node_id']}\n")
+    f.write(f"NODE_API_KEY={data['node_api_key']}\n")
+    f.write(f"REST_API_URL={data['rest_api_url']}\n")
+PY
+  log "Linked. Node ID written to $ENV_FILE."
+
+  # The panel computed this hostname from the node's admin-chosen name and
+  # already persisted it on the ingest_nodes row, so applying it here is what
+  # makes a freshly imaged, generically-named VPS self-identify correctly
+  # with zero manual admin steps.
+  NODE_HOSTNAME="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('hostname',''))" "$CLAIM_RESPONSE")"
+  if [ -n "$NODE_HOSTNAME" ]; then
+    log "Setting hostname to $NODE_HOSTNAME..."
+    hostnamectl set-hostname "$NODE_HOSTNAME"
+    if grep -q '^127\.0\.1\.1[[:space:]]' /etc/hosts; then
+      sed -i "s/^127\.0\.1\.1[[:space:]].*/127.0.1.1\t$NODE_HOSTNAME/" /etc/hosts
+    else
+      echo -e "127.0.1.1\t$NODE_HOSTNAME" >> /etc/hosts
+    fi
+    if command -v tailscale >/dev/null && tailscale status >/dev/null 2>&1; then
+      tailscale set --hostname="$NODE_HOSTNAME" 2>/dev/null || warn "Couldn't set the Tailscale hostname (non-fatal)."
+    fi
+  else
+    warn "Claim response did not include a hostname; leaving the host's hostname unchanged."
+  fi
+else
+  if [ ! -f "$ENV_FILE" ]; then
+    cp "$REPO_DIR/.env.example" "$ENV_FILE"
+    warn "No --rest-api-url/--token given. Scaffolded $ENV_FILE from .env.example -- fill in SUPABASE_URL, SUPABASE_SECRET_KEY, INGEST_CONTROL_SECRET, INGEST_CONTROL_URL by hand before starting."
+  else
+    log "$ENV_FILE already exists, leaving it as-is."
+  fi
+fi
+chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+
+log "Building images as $SERVICE_USER..."
+sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose -f '$COMPOSE_FILE' build"
+
+ENV_COMPLETE="true"
+for key in SUPABASE_URL SUPABASE_SECRET_KEY INGEST_CONTROL_SECRET INGEST_CONTROL_URL; do
+  grep -q "^${key}=.\+" "$ENV_FILE" || ENV_COMPLETE="false"
+done
+
+if [ "$DO_START" = "true" ]; then
+  if [ "$ENV_COMPLETE" = "true" ]; then
+    log "Starting the stack..."
+    sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose -f '$COMPOSE_FILE' up -d"
+  else
+    warn "--start was given but $ENV_FILE is missing required values; not starting. Fill it in and run: sudo -u $SERVICE_USER bash -c 'cd $REPO_DIR && docker compose -f $COMPOSE_FILE up -d'"
+  fi
+else
+  log "Build complete. Not starting (pass --start to bring the stack up automatically)."
+  log "To start manually: sudo -u $SERVICE_USER bash -c 'cd $REPO_DIR && docker compose -f $COMPOSE_FILE up -d'"
+fi
+
+log "Done."
