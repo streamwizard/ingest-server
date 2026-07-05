@@ -66,7 +66,8 @@
 #   --ssh-cidr=CIDR            Source CIDR allowed to reach SSH (default: 0.0.0.0/0 -- this is a
 #                              public VPS, not a LAN box; narrow this if you can)
 #   --public-ip=IP             Manual override for the self-reported public IP (default: autodetect)
-#   --repo-url=URL             Git URL to clone (default: streamwizard/ingest-server on GitHub)
+#   --ref=REF                  Branch/tag to fetch docker-compose.yml and .env.example from
+#                              (default: main)
 #   --repo-dir=DIR             Install directory (default: /opt/ingest-server)
 #   --service-user=NAME        Dedicated service account to run containers as (default: ingest)
 #   --start                    Bring the stack up at the end (default: build only)
@@ -79,10 +80,16 @@ TOKEN=""
 TAILSCALE_AUTHKEY=""
 SSH_CIDR="0.0.0.0/0"
 PUBLIC_IP_OVERRIDE=""
-REPO_URL="https://github.com/streamwizard/ingest-server.git"
+REF="main"
 REPO_DIR="/opt/ingest-server"
 SERVICE_USER="ingest"
 DO_START="false"
+
+# Node installs don't clone the repo -- they just need docker-compose.yml and
+# .env.example, fetched straight from GitHub at the given ref. This keeps a
+# fresh node from needing the whole monorepo (bun workspace, source, etc.)
+# just to run prebuilt images (see .github/workflows/build-images.yml).
+RAW_BASE="https://raw.githubusercontent.com/streamwizard/ingest-server"
 
 log()  { echo "[streamwizard] [install] $*"; }
 warn() { echo "[streamwizard] [install] WARNING: $*" >&2; }
@@ -110,7 +117,7 @@ for arg in "$@"; do
     --tailscale-authkey=*) TAILSCALE_AUTHKEY="${arg#*=}" ;;
     --ssh-cidr=*) SSH_CIDR="${arg#*=}" ;;
     --public-ip=*) PUBLIC_IP_OVERRIDE="${arg#*=}" ;;
-    --repo-url=*) REPO_URL="${arg#*=}" ;;
+    --ref=*) REF="${arg#*=}" ;;
     --repo-dir=*) REPO_DIR="${arg#*=}" ;;
     --service-user=*) SERVICE_USER="${arg#*=}" ;;
     --start) DO_START="true" ;;
@@ -128,7 +135,6 @@ fi
 log "Installing baseline packages..."
 apt-get update -qq
 command -v curl >/dev/null || apt-get install -y --no-install-recommends curl >/dev/null
-command -v git >/dev/null || apt-get install -y --no-install-recommends git >/dev/null
 command -v ufw >/dev/null || apt-get install -y --no-install-recommends ufw >/dev/null
 
 log "Checking Tailscale..."
@@ -211,12 +217,11 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
 fi
 usermod -aG docker "$SERVICE_USER"
 
-log "Fetching ingest-server into $REPO_DIR..."
-if [ -d "$REPO_DIR/.git" ]; then
-  warn "$REPO_DIR already exists; leaving it as-is. Update it yourself (git pull) if you want the latest source."
-else
-  git clone "$REPO_URL" "$REPO_DIR"
-fi
+log "Fetching node config files (ref: $REF)..."
+mkdir -p "$REPO_DIR/docker/stream-server"
+curl_with_backoff -fsSL -o "$REPO_DIR/docker/stream-server/docker-compose.yml" \
+  "$RAW_BASE/$REF/docker/stream-server/docker-compose.yml" \
+  || die "Failed to fetch docker-compose.yml from ref '$REF'. Check the --ref value and your network connection."
 chown -R "$SERVICE_USER:$SERVICE_USER" "$REPO_DIR"
 
 COMPOSE_FILE="docker/stream-server/docker-compose.yml"
@@ -343,12 +348,14 @@ with open(env_path, "w") as f:
     f.write("INGEST_LOG_LEVEL=INFO\n")
     f.write(f"TAILSCALE_IP={tailscale_ip}\n")
     f.write("WS_SERVER_URL=\n")
-    f.write("INFLUXDB_URL=\n")
-    f.write("INFLUXDB_TOKEN=\n")
-    f.write("INFLUXDB_ORG=\n")
-    f.write("INFLUXDB_BUCKET=\n")
-    f.write("SENTRY_DSN=\n")
-    f.write("SENTRY_RELEASE=\n")
+    f.write(f"INFLUXDB_URL={data.get('influxdb_url') or ''}\n")
+    f.write(f"INFLUXDB_TOKEN={data.get('influxdb_token') or ''}\n")
+    f.write(f"INFLUXDB_ORG={data.get('influxdb_org') or ''}\n")
+    f.write(f"INFLUXDB_BUCKET={data.get('influxdb_bucket') or ''}\n")
+    # Blank by default -- docker-compose.yml falls back to :latest. Set this
+    # to pin the node to a specific build (e.g. sha-abc1234) without editing
+    # docker-compose.yml.
+    f.write("INGEST_IMAGE_TAG=\n")
     # Not consumed by anything yet -- written for forward-compat with a
     # future ingest-node-authenticated heartbeat/reconcile endpoint.
     f.write(f"NODE_ID={data['node_id']}\n")
@@ -378,7 +385,8 @@ PY
   fi
 else
   if [ ! -f "$ENV_FILE" ]; then
-    cp "$REPO_DIR/.env.example" "$ENV_FILE"
+    curl_with_backoff -fsSL -o "$ENV_FILE" "$RAW_BASE/$REF/.env.example" \
+      || die "Failed to fetch .env.example from ref '$REF'. Check the --ref value and your network connection."
     warn "No --rest-api-url/--token given. Scaffolded $ENV_FILE from .env.example -- fill in SUPABASE_URL, SUPABASE_SECRET_KEY, INGEST_CONTROL_SECRET, INGEST_CONTROL_URL by hand before starting."
   else
     log "$ENV_FILE already exists, leaving it as-is."
@@ -387,8 +395,8 @@ fi
 chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 
-log "Building images as $SERVICE_USER..."
-sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose -f '$COMPOSE_FILE' --env-file '$ENV_FILE' build"
+log "Pulling images as $SERVICE_USER..."
+sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose -f '$COMPOSE_FILE' --env-file '$ENV_FILE' pull"
 
 ENV_COMPLETE="true"
 for key in SUPABASE_URL SUPABASE_SECRET_KEY INGEST_CONTROL_SECRET INGEST_CONTROL_URL; do
@@ -403,7 +411,7 @@ if [ "$DO_START" = "true" ]; then
     warn "--start was given but $ENV_FILE is missing required values; not starting. Fill it in and run: sudo -u $SERVICE_USER bash -c 'cd $REPO_DIR && docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d'"
   fi
 else
-  log "Build complete. Not starting (pass --start to bring the stack up automatically)."
+  log "Pull complete. Not starting (pass --start to bring the stack up automatically)."
   log "To start manually: sudo -u $SERVICE_USER bash -c 'cd $REPO_DIR && docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d'"
 fi
 

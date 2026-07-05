@@ -21,10 +21,6 @@ const schema = z.object({
   // Optional: if unset, live broadcast is skipped (durable history via Supabase
   // still works).
   WS_SERVER_URL: z.string().optional(),
-
-  // Sentry
-  SENTRY_DSN: z.string().optional(),
-  SENTRY_RELEASE: z.string().optional(),
 });
 
 export const env = schema.parse(process.env);

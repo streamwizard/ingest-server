@@ -5,14 +5,15 @@
 # are launched dynamically by the control plane (via the Docker socket) and join
 # the same `stream-server` network — they are intentionally NOT defined here.
 #
-# Build context for the app images is the repo root (../..). Copy .env.example
-# to .env and fill it in before `docker compose up`.
+# Images are prebuilt by .github/workflows/build-images.yml and pulled from
+# GHCR -- nothing here is built locally. Copy .env.example to .env and fill
+# it in before `docker compose up`. Set INGEST_IMAGE_TAG in .env to pin a
+# node to a specific build (e.g. sha-abc1234); leave it blank to track
+# :latest.
 
 services:
   ingest-control:
-    build:
-      context: ../..
-      dockerfile: apps/ingest-control/Dockerfile
+    image: ghcr.io/streamwizard/ingest-control:${INGEST_IMAGE_TAG:-latest}
     env_file:
       - ../../.env
     networks:
@@ -20,9 +21,7 @@ services:
     restart: unless-stopped
 
   ingest-media:
-    build:
-      context: ../..
-      dockerfile: apps/ingest-media/Dockerfile
+    image: ghcr.io/streamwizard/ingest-media:${INGEST_IMAGE_TAG:-latest}
     env_file:
       - ../../.env
     ports:
@@ -38,9 +37,7 @@ services:
     restart: unless-stopped
 
   srtla-receiver:
-    build:
-      context: ./srtla
-      dockerfile: Dockerfile
+    image: ghcr.io/streamwizard/srtla-receiver:${INGEST_IMAGE_TAG:-latest}
     command: ["5000", "ingest-media", "8889"]
     ports:
       - "5000:5000/udp"   # public SRTLA ingest

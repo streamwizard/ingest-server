@@ -1,10 +1,5 @@
-import { Sentry } from "./sentry";
-process.on("uncaughtException", (err) => { Sentry.captureException(err); });
-process.on("unhandledRejection", (reason) => { Sentry.captureException(reason); });
 import { env } from "./lib/env";
 import { Hono } from "hono";
-import { sentry } from "@sentry/hono/bun";
-import { getSentryOptions, createSupabaseIntegration } from "@repo/sentry";
 import { metricsMiddleware, isMetricsEnabled } from "@repo/metrics";
 import { internalAuth } from "./middleware/internal-auth";
 import { authorizeHandler } from "./routes/authorize";
@@ -14,16 +9,6 @@ import { wsBroadcastClient } from "./lib/ws-broadcast";
 import { startSystemMetricsSampler } from "./services/system-metrics-sampler";
 
 const app = new Hono();
-
-if (env.SENTRY_DSN && env.NODE_ENV !== "development") {
-  app.use("*", sentry(app, {
-    ...getSentryOptions({ dsn: env.SENTRY_DSN, service: "ingest-control" }),
-    integrations: [createSupabaseIntegration(Sentry)],
-  }));
-  console.log("[sentry] active");
-} else {
-  console.log("[sentry] inactive (no SENTRY_DSN)");
-}
 
 app.use("*", metricsMiddleware("ingest-control"));
 
