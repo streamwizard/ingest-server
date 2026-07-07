@@ -383,9 +383,9 @@ with open(env_path, "w") as f:
     # to pin the node to a specific build (e.g. sha-abc1234) without editing
     # docker-compose.yml.
     f.write("INGEST_IMAGE_TAG=\n")
-    # Not consumed by anything yet -- written for forward-compat with a
-    # future ingest-node-authenticated heartbeat/reconcile endpoint.
-    f.write(f"NODE_ID={data['node_id']}\n")
+    # ingest-control reads INGEST_NODE_ID to tag this node's host metrics in
+    # InfluxDB -- without it every node reports as "unknown-node".
+    f.write(f"INGEST_NODE_ID={data['node_id']}\n")
     f.write(f"NODE_API_KEY={data['node_api_key']}\n")
     f.write(f"REST_API_URL={data['rest_api_url']}\n")
 PY

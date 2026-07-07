@@ -71,13 +71,35 @@ async function readNetDevTotals(): Promise<{ rxBytes: number; txBytes: number }>
 
 let lastNet: { rxBytes: number; txBytes: number; at: number } | null = null;
 
+// Root filesystem usage the way df computes it: used / (used + available),
+// with "available" being the non-root-reserved blocks. Inside the container
+// this stats the overlay mount, which reports the backing host disk.
+async function getDiskUsedPct(): Promise<number | undefined> {
+  try {
+    const { statfs } = await import("node:fs/promises");
+    const stats = await statfs("/");
+    const used = stats.blocks - stats.bfree;
+    const denominator = used + stats.bavail;
+    if (denominator <= 0) return undefined;
+    return (used / denominator) * 100;
+  } catch {
+    return undefined;
+  }
+}
+
 async function sampleHostSystem(): Promise<{
   cpuPct: number;
   mem: { usedMb: number; totalMb: number };
   rxBytesPerSec: number;
   txBytesPerSec: number;
+  diskUsedPct: number | undefined;
 }> {
-  const [cpuPct, mem, net] = await Promise.all([getCpuPercent(), getMemMb(), readNetDevTotals()]);
+  const [cpuPct, mem, net, diskUsedPct] = await Promise.all([
+    getCpuPercent(),
+    getMemMb(),
+    readNetDevTotals(),
+    getDiskUsedPct(),
+  ]);
 
   const now = Date.now();
   let rxBytesPerSec = 0;
@@ -91,19 +113,20 @@ async function sampleHostSystem(): Promise<{
   }
   lastNet = { rxBytes: net.rxBytes, txBytes: net.txBytes, at: now };
 
-  return { cpuPct, mem, rxBytesPerSec, txBytesPerSec };
+  return { cpuPct, mem, rxBytesPerSec, txBytesPerSec, diskUsedPct };
 }
 
 export function startSystemMetricsSampler(nodeId: string, intervalMs = 10_000): void {
   setInterval(() => {
     sampleHostSystem()
-      .then(({ cpuPct, mem, rxBytesPerSec, txBytesPerSec }) => {
+      .then(({ cpuPct, mem, rxBytesPerSec, txBytesPerSec, diskUsedPct }) => {
         trackHostSystemSample(nodeId, {
           cpu_pct: cpuPct,
           mem_used_mb: mem.usedMb,
           mem_total_mb: mem.totalMb,
           rx_bytes_per_sec: rxBytesPerSec,
           tx_bytes_per_sec: txBytesPerSec,
+          ...(diskUsedPct !== undefined ? { disk_used_pct: diskUsedPct } : {}),
         });
       })
       .catch(() => {

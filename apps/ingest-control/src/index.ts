@@ -10,6 +10,11 @@ import { startSystemMetricsSampler } from "./services/system-metrics-sampler";
 
 const app = new Hono();
 
+// Liveness probe for the monitoring alerter (reached over the tailnet) —
+// registered before the metrics middleware so the 60s probe traffic never
+// pollutes http_request.
+app.get("/health", (c) => c.json({ ok: true }));
+
 app.use("*", metricsMiddleware("ingest-control"));
 
 app.get("/", (c) => c.json({ message: "StreamWizard Ingest Control", version: "1.0.0" }));

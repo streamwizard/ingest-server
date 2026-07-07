@@ -11,6 +11,8 @@ export interface HostSystemSample {
   mem_total_mb: number;
   rx_bytes_per_sec: number;
   tx_bytes_per_sec: number;
+  /** Root filesystem usage; omitted when the sampler couldn't stat it. */
+  disk_used_pct?: number;
 }
 
 export function trackHostSystemSample(nodeId: string, sample: HostSystemSample): void {

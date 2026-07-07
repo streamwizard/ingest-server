@@ -13,8 +13,9 @@ const schema = z.object({
 
   // ingest_nodes.id from the claim flow (see docs/PANEL_INTEGRATION.md) —
   // tags this node's host metrics so they're attributable in InfluxDB.
-  // Falls back to "unknown-node" for local/dev boxes that never claimed.
-  INGEST_NODE_ID: z.string().default("unknown-node"),
+  // Older installs wrote the id as NODE_ID, so fall back to that before
+  // giving up with "unknown-node" (local/dev boxes that never claimed).
+  INGEST_NODE_ID: z.string().default(process.env.NODE_ID || "unknown-node"),
 
   // Realtime fan-out — push live ingest stats to ws-server as a "bot" client so
   // a logged-in dashboard user can subscribe to their own room and watch them.

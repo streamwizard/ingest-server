@@ -16,6 +16,10 @@ services:
     image: ghcr.io/streamwizard/ingest-control:${INGEST_IMAGE_TAG:-latest}
     env_file:
       - ../../.env
+    ports:
+      # /health for the monitoring alerter — published ONLY on the Tailscale
+      # interface, same pattern as ingest-media's OBS output port below.
+      - "${TAILSCALE_IP}:8090:8090"
     networks:
       - stream-server
     restart: unless-stopped
