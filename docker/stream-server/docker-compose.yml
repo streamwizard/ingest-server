@@ -16,6 +16,15 @@ services:
     image: ghcr.io/streamwizard/ingest-control:${INGEST_IMAGE_TAG:-latest}
     env_file:
       - ../../.env
+    # The host bandwidth sampler lives here, but the SRT ingest arrives in
+    # ingest-media's network namespace — a bridge container only sees its own
+    # eth0, so rx/tx read as a trickle. pid:host lets the sampler read the host
+    # root netns (init = PID 1) via HOST_NET_DEV and report real NIC counters.
+    # Networking is unchanged: this stays on the bridge, so ingest-media still
+    # reaches it at http://ingest-control:8090.
+    pid: host
+    environment:
+      HOST_NET_DEV: /proc/1/net/dev
     ports:
       # /health for the monitoring alerter — published ONLY on the Tailscale
       # interface, same pattern as ingest-media's OBS output port below.

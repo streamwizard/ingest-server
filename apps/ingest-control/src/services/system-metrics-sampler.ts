@@ -47,10 +47,22 @@ async function getMemMb(): Promise<{ usedMb: number; totalMb: number }> {
   };
 }
 
-const IGNORED_INTERFACE_PREFIXES = ["lo", "docker", "veth", "br-"];
+// Where to read interface byte counters from. Defaults to this process's own
+// /proc/net/dev — correct on bare metal / host networking. In the split-
+// container deploy the SRT ingest lands in ingest-media's network namespace,
+// invisible here, so docker-compose sets HOST_NET_DEV=/proc/1/net/dev (with
+// pid:host) to read the host root netns and see the real NIC counters.
+const NET_DEV_PATH = process.env.HOST_NET_DEV || "/proc/net/dev";
+
+// Physical-NIC only. Loopback and Docker plumbing (docker0, bridges, veth
+// pairs) are skipped; overlay/tunnel devices (tailscale, WireGuard, tun/tap)
+// are skipped too so their traffic isn't double-counted against the encrypted
+// bytes already flowing over the physical interface. Matters most when reading
+// the host netns, where all of these are present.
+const IGNORED_INTERFACE_PREFIXES = ["lo", "docker", "veth", "br-", "tailscale", "wg", "tun", "tap"];
 
 async function readNetDevTotals(): Promise<{ rxBytes: number; txBytes: number }> {
-  const text = await Bun.file("/proc/net/dev").text();
+  const text = await Bun.file(NET_DEV_PATH).text();
   let rxBytes = 0;
   let txBytes = 0;
 
