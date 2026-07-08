@@ -187,19 +187,46 @@ export function startSystemMetricsSampler(nodeId: string, intervalMs = 10_000): 
           tailscale_tx_bytes_per_sec: s.tsTxBytesPerSec,
           ...(s.diskUsedPct !== undefined ? { disk_used_pct: s.diskUsedPct } : {}),
         });
+      })
+      .catch(() => {
+        // never let metrics collection crash the process
+      });
+  }, intervalMs);
+}
 
-        // Realtime path: network fields only — cpu/mem/disk deliberately stay
-        // InfluxDB-only. Fire-and-forget like every other broadcast; a closed
-        // socket just means this 10s sample is skipped.
+// Separate delta baseline from the 10s sampler's `lastNet`: both loops read
+// the same counters, and sharing a baseline would make each loop's window
+// depend on whichever ran last.
+let lastNetWs: { rxBytes: number; txBytes: number; tsRxBytes: number; tsTxBytes: number; at: number } | null = null;
+
+/**
+ * Realtime node-bandwidth push to ws-server, deliberately decoupled from the
+ * 10s InfluxDB sampler: the monitor wants ~1s network data, but sampling
+ * cpu/mem/disk (and writing Influx points) at 1Hz would be pure waste. This
+ * loop reads only the NIC counters. Fire-and-forget like every other
+ * broadcast — a closed socket just means the sample is skipped.
+ */
+export function startNodeBandwidthBroadcaster(nodeId: string, intervalMs = 1_000): void {
+  setInterval(() => {
+    readNetDevTotals()
+      .then((net) => {
+        const now = Date.now();
+        const prev = lastNetWs;
+        lastNetWs = { ...net, at: now };
+        // First tick has no baseline — skip rather than report a bogus 0.
+        if (!prev) return;
+        const dtSec = (now - prev.at) / 1000;
+        if (dtSec <= 0) return;
+
         wsBroadcastClient.send({
           kind: "node_metrics",
           payload: {
             node_id: nodeId,
-            ts: Date.now(),
-            rx_bytes_per_sec: s.rxBytesPerSec,
-            tx_bytes_per_sec: s.txBytesPerSec,
-            tailscale_rx_bytes_per_sec: s.tsRxBytesPerSec,
-            tailscale_tx_bytes_per_sec: s.tsTxBytesPerSec,
+            ts: now,
+            rx_bytes_per_sec: Math.max(0, (net.rxBytes - prev.rxBytes) / dtSec),
+            tx_bytes_per_sec: Math.max(0, (net.txBytes - prev.txBytes) / dtSec),
+            tailscale_rx_bytes_per_sec: Math.max(0, (net.tsRxBytes - prev.tsRxBytes) / dtSec),
+            tailscale_tx_bytes_per_sec: Math.max(0, (net.tsTxBytes - prev.tsTxBytes) / dtSec),
           },
         });
       })
