@@ -5,7 +5,7 @@ import { trackHostSystemSample } from "@repo/metrics";
 // (see obs-instance-manager/src/services/metrics.ts) — reimplemented locally
 // since these are separate repos with no shared package between them.
 
-async function readProcStatCpuLine(): Promise<{ idle: number; total: number }> {
+async function readProcStatCpuLine(): Promise<{ idle: number; total: number; steal: number }> {
   const text = await Bun.file("/proc/stat").text();
   const cpuLine = text.split("\n").find((line) => line.startsWith("cpu "));
   if (!cpuLine) throw new Error("Could not read cpu line from /proc/stat");
@@ -13,18 +13,34 @@ async function readProcStatCpuLine(): Promise<{ idle: number; total: number }> {
   const parts = cpuLine.trim().split(/\s+/).slice(1).map(Number);
   const [user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0, steal = 0] = parts;
   const total = user + nice + system + idle + iowait + irq + softirq + steal;
-  return { idle: idle + iowait, total };
+  return { idle: idle + iowait, total, steal };
 }
 
-async function getCpuPercent(): Promise<number> {
+// Busy % and steal % over the same 100ms sample. Steal is CPU time the
+// hypervisor gave to other VMs while ours wanted to run — sustained non-zero
+// steal means the box is being throttled by a noisy neighbour, which CPU%
+// alone can't reveal.
+async function getCpuStats(): Promise<{ cpuPct: number; stealPct: number }> {
   const first = await readProcStatCpuLine();
   await new Promise((resolve) => setTimeout(resolve, 100));
   const second = await readProcStatCpuLine();
 
   const idleDelta = second.idle - first.idle;
   const totalDelta = second.total - first.total;
-  if (totalDelta <= 0) return 0;
-  return Math.max(0, Math.min(100, (1 - idleDelta / totalDelta) * 100));
+  const stealDelta = second.steal - first.steal;
+  if (totalDelta <= 0) return { cpuPct: 0, stealPct: 0 };
+  const clamp = (v: number) => Math.max(0, Math.min(100, v));
+  return {
+    cpuPct: clamp((1 - idleDelta / totalDelta) * 100),
+    stealPct: clamp((stealDelta / totalDelta) * 100),
+  };
+}
+
+// 1-minute load average. System-wide (not namespaced), so this is the host's
+// figure whether we read our own /proc or the host netns under pid:host.
+async function getLoadAvg1(): Promise<number> {
+  const text = await Bun.file("/proc/loadavg").text();
+  return Number(text.trim().split(/\s+/)[0]) || 0;
 }
 
 async function getMemMb(): Promise<{ usedMb: number; totalMb: number }> {
@@ -61,27 +77,44 @@ const NET_DEV_PATH = process.env.HOST_NET_DEV || "/proc/net/dev";
 // the host netns, where all of these are present.
 const IGNORED_INTERFACE_PREFIXES = ["lo", "docker", "veth", "br-", "tailscale", "wg", "tun", "tap"];
 
-async function readNetDevTotals(): Promise<{ rxBytes: number; txBytes: number }> {
+async function readNetDevTotals(): Promise<{
+  rxBytes: number;
+  txBytes: number;
+  tsRxBytes: number;
+  tsTxBytes: number;
+}> {
   const text = await Bun.file(NET_DEV_PATH).text();
   let rxBytes = 0;
   let txBytes = 0;
+  let tsRxBytes = 0;
+  let tsTxBytes = 0;
 
   for (const line of text.split("\n").slice(2)) {
     const [ifaceRaw, statsRaw] = line.split(":");
     if (!ifaceRaw || !statsRaw) continue;
     const iface = ifaceRaw.trim();
-    if (IGNORED_INTERFACE_PREFIXES.some((prefix) => iface.startsWith(prefix))) continue;
 
     const fields = statsRaw.trim().split(/\s+/).map(Number);
     const [rx = 0, , , , , , , , tx = 0] = fields;
+
+    // Tailscale gets its own counters (the OBS output pull rides it) but stays
+    // out of the physical totals — its bytes already appear on the NIC as
+    // encrypted WireGuard traffic, so counting it here too would double it.
+    if (iface.startsWith("tailscale")) {
+      tsRxBytes += rx;
+      tsTxBytes += tx;
+      continue;
+    }
+    if (IGNORED_INTERFACE_PREFIXES.some((prefix) => iface.startsWith(prefix))) continue;
+
     rxBytes += rx;
     txBytes += tx;
   }
 
-  return { rxBytes, txBytes };
+  return { rxBytes, txBytes, tsRxBytes, tsTxBytes };
 }
 
-let lastNet: { rxBytes: number; txBytes: number; at: number } | null = null;
+let lastNet: { rxBytes: number; txBytes: number; tsRxBytes: number; tsTxBytes: number; at: number } | null = null;
 
 // Root filesystem usage the way df computes it: used / (used + available),
 // with "available" being the non-root-reserved blocks. Inside the container
@@ -101,13 +134,18 @@ async function getDiskUsedPct(): Promise<number | undefined> {
 
 async function sampleHostSystem(): Promise<{
   cpuPct: number;
+  stealPct: number;
+  loadAvg1: number;
   mem: { usedMb: number; totalMb: number };
   rxBytesPerSec: number;
   txBytesPerSec: number;
+  tsRxBytesPerSec: number;
+  tsTxBytesPerSec: number;
   diskUsedPct: number | undefined;
 }> {
-  const [cpuPct, mem, net, diskUsedPct] = await Promise.all([
-    getCpuPercent(),
+  const [{ cpuPct, stealPct }, loadAvg1, mem, net, diskUsedPct] = await Promise.all([
+    getCpuStats(),
+    getLoadAvg1(),
     getMemMb(),
     readNetDevTotals(),
     getDiskUsedPct(),
@@ -116,29 +154,37 @@ async function sampleHostSystem(): Promise<{
   const now = Date.now();
   let rxBytesPerSec = 0;
   let txBytesPerSec = 0;
+  let tsRxBytesPerSec = 0;
+  let tsTxBytesPerSec = 0;
   if (lastNet) {
     const dtSec = (now - lastNet.at) / 1000;
     if (dtSec > 0) {
       rxBytesPerSec = Math.max(0, (net.rxBytes - lastNet.rxBytes) / dtSec);
       txBytesPerSec = Math.max(0, (net.txBytes - lastNet.txBytes) / dtSec);
+      tsRxBytesPerSec = Math.max(0, (net.tsRxBytes - lastNet.tsRxBytes) / dtSec);
+      tsTxBytesPerSec = Math.max(0, (net.tsTxBytes - lastNet.tsTxBytes) / dtSec);
     }
   }
-  lastNet = { rxBytes: net.rxBytes, txBytes: net.txBytes, at: now };
+  lastNet = { rxBytes: net.rxBytes, txBytes: net.txBytes, tsRxBytes: net.tsRxBytes, tsTxBytes: net.tsTxBytes, at: now };
 
-  return { cpuPct, mem, rxBytesPerSec, txBytesPerSec, diskUsedPct };
+  return { cpuPct, stealPct, loadAvg1, mem, rxBytesPerSec, txBytesPerSec, tsRxBytesPerSec, tsTxBytesPerSec, diskUsedPct };
 }
 
 export function startSystemMetricsSampler(nodeId: string, intervalMs = 10_000): void {
   setInterval(() => {
     sampleHostSystem()
-      .then(({ cpuPct, mem, rxBytesPerSec, txBytesPerSec, diskUsedPct }) => {
+      .then((s) => {
         trackHostSystemSample(nodeId, {
-          cpu_pct: cpuPct,
-          mem_used_mb: mem.usedMb,
-          mem_total_mb: mem.totalMb,
-          rx_bytes_per_sec: rxBytesPerSec,
-          tx_bytes_per_sec: txBytesPerSec,
-          ...(diskUsedPct !== undefined ? { disk_used_pct: diskUsedPct } : {}),
+          cpu_pct: s.cpuPct,
+          cpu_steal_pct: s.stealPct,
+          load_avg_1: s.loadAvg1,
+          mem_used_mb: s.mem.usedMb,
+          mem_total_mb: s.mem.totalMb,
+          rx_bytes_per_sec: s.rxBytesPerSec,
+          tx_bytes_per_sec: s.txBytesPerSec,
+          tailscale_rx_bytes_per_sec: s.tsRxBytesPerSec,
+          tailscale_tx_bytes_per_sec: s.tsTxBytesPerSec,
+          ...(s.diskUsedPct !== undefined ? { disk_used_pct: s.diskUsedPct } : {}),
         });
       })
       .catch(() => {
