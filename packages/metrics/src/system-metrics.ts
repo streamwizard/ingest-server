@@ -7,10 +7,18 @@ import { pushPoint } from "./influx-client";
 
 export interface HostSystemSample {
   cpu_pct: number;
+  /** CPU time stolen by the hypervisor (VM throttling); 0 on bare metal. */
+  cpu_steal_pct?: number;
+  /** 1-minute load average. */
+  load_avg_1?: number;
   mem_used_mb: number;
   mem_total_mb: number;
   rx_bytes_per_sec: number;
   tx_bytes_per_sec: number;
+  /** Tailscale-interface throughput (the OBS output-pull path), tracked apart
+   *  from the physical NIC totals. */
+  tailscale_rx_bytes_per_sec?: number;
+  tailscale_tx_bytes_per_sec?: number;
   /** Root filesystem usage; omitted when the sampler couldn't stat it. */
   disk_used_pct?: number;
 }
