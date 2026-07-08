@@ -1,4 +1,4 @@
-import type { BotBroadcastMessage } from "@repo/types";
+import type { BotOutboundMessage } from "@repo/types";
 import { env } from "./env";
 
 // Pushes live events into ws-server's room system as a "bot" client, the same
@@ -19,14 +19,17 @@ class WsBroadcastClient {
     this.dial();
   }
 
-  send(message: BotBroadcastMessage): void {
+  send(message: BotOutboundMessage): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
     }
   }
 
   private dial(): void {
-    const ws = new WebSocket(`${env.WS_SERVER_URL}/ws?role=bot`, {
+    // `source` labels this connection in ws-server's monitor view and metrics
+    // — identity only, authorization still rides the Bearer header.
+    const source = encodeURIComponent(`ingest-node:${env.INGEST_NODE_ID}`);
+    const ws = new WebSocket(`${env.WS_SERVER_URL}/ws?role=bot&source=${source}`, {
       // @ts-expect-error Bun WebSocket supports headers in options
       headers: { Authorization: `Bearer ${env.SUPABASE_SECRET_KEY}` },
     });

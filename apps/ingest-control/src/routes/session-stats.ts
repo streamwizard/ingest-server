@@ -4,6 +4,7 @@ import { supabase } from "@repo/supabase";
 import { insertIngestSessionStatsBatch, type IngestSessionStatsInsert } from "@repo/supabase/queries/ingest";
 import { trackIngestStreamSample } from "@repo/metrics";
 import { wsBroadcastClient } from "../lib/ws-broadcast";
+import { env } from "../lib/env";
 
 const bodySchema = z.object({
   session_id: z.string().uuid(),
@@ -162,11 +163,19 @@ export async function sessionStatsHandler(c: Context) {
   });
 
   // Live push: full raw + derived set, so the streamer's app decides when to
-  // switch scenes on whichever parameters it cares about.
+  // switch scenes on whichever parameters it cares about. node_id + stream key
+  // identity let consumers (monitor, multi-camera dashboards) attribute the
+  // stream without a DB lookup.
   wsBroadcastClient.send({
     userId: body.user_id,
     type: "streamwizard.ingest_stats",
-    payload: { session_id: body.session_id, protocol: body.protocol, ...fullStats },
+    payload: {
+      session_id: body.session_id,
+      protocol: body.protocol,
+      node_id: env.INGEST_NODE_ID,
+      ...(streamKey ? { stream_key_id: streamKey.streamKeyId, label: streamKey.label } : {}),
+      ...fullStats,
+    },
   });
 
   return c.json({ ok: true });

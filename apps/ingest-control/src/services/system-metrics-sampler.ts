@@ -1,4 +1,5 @@
 import { trackHostSystemSample } from "@repo/metrics";
+import { wsBroadcastClient } from "../lib/ws-broadcast";
 
 // Periodic host CPU/RAM/bandwidth sampler for this ingest node, mirroring the
 // /proc-based technique obs-instance-manager uses for its own host metrics
@@ -185,6 +186,21 @@ export function startSystemMetricsSampler(nodeId: string, intervalMs = 10_000): 
           tailscale_rx_bytes_per_sec: s.tsRxBytesPerSec,
           tailscale_tx_bytes_per_sec: s.tsTxBytesPerSec,
           ...(s.diskUsedPct !== undefined ? { disk_used_pct: s.diskUsedPct } : {}),
+        });
+
+        // Realtime path: network fields only — cpu/mem/disk deliberately stay
+        // InfluxDB-only. Fire-and-forget like every other broadcast; a closed
+        // socket just means this 10s sample is skipped.
+        wsBroadcastClient.send({
+          kind: "node_metrics",
+          payload: {
+            node_id: nodeId,
+            ts: Date.now(),
+            rx_bytes_per_sec: s.rxBytesPerSec,
+            tx_bytes_per_sec: s.txBytesPerSec,
+            tailscale_rx_bytes_per_sec: s.tsRxBytesPerSec,
+            tailscale_tx_bytes_per_sec: s.tsTxBytesPerSec,
+          },
         });
       })
       .catch(() => {
