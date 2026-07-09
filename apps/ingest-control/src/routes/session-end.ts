@@ -3,6 +3,8 @@ import { z } from "zod";
 import { supabase } from "@repo/supabase";
 import { endIngestSession } from "@repo/supabase/queries/ingest";
 import { clearSessionStats } from "./session-stats";
+import { wsBroadcastClient } from "../lib/ws-broadcast";
+import { env } from "../lib/env";
 
 const bodySchema = z.object({
   session_id: z.string().uuid(),
@@ -30,6 +32,15 @@ export async function sessionEndHandler(c: Context) {
     console.error(`[session-end] failed to close session ${body.session_id}:`, error);
   }
   clearSessionStats(body.session_id);
+
+  // Live push so the auto-switcher reacts to a clean disconnect instantly
+  // instead of waiting out its stats-silence timeout. Best-effort: if the
+  // ws-server link is down, the timeout path still covers it.
+  wsBroadcastClient.send({
+    userId: body.user_id,
+    type: "streamwizard.ingest_session_ended",
+    payload: { session_id: body.session_id, node_id: env.INGEST_NODE_ID },
+  });
 
   return c.json({ ok: true });
 }
