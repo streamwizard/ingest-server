@@ -1,4 +1,5 @@
 import { trackHostSystemSample } from "@repo/metrics";
+import { env } from "../lib/env";
 import { wsBroadcastClient } from "../lib/ws-broadcast";
 
 // Periodic host CPU/RAM/bandwidth sampler for this ingest node, mirroring the
@@ -186,6 +187,9 @@ export function startSystemMetricsSampler(nodeId: string, intervalMs = 10_000): 
           tailscale_rx_bytes_per_sec: s.tsRxBytesPerSec,
           tailscale_tx_bytes_per_sec: s.tsTxBytesPerSec,
           ...(s.diskUsedPct !== undefined ? { disk_used_pct: s.diskUsedPct } : {}),
+          // Omitted (not 0) when WS broadcast is disabled, so nodes without a
+          // configured ws-server can't trip the ws_broadcast_down alert.
+          ...(env.WS_SERVER_URL ? { ws_broadcast_connected: wsBroadcastClient.isConnected() ? 1 : 0 } : {}),
         });
       })
       .catch(() => {

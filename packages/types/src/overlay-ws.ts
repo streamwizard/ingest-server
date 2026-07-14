@@ -95,7 +95,11 @@ export type { OverlayGeoPayload, OverlayStatusPayload };
 
 export type StreamWizardEventType =
   | "streamwizard.geo"
-  | "streamwizard.ingest_stats";
+  | "streamwizard.ingest_stats"
+  // Pushed once by ingest-control when the media plane reports a session
+  // ended — lets the auto-switcher go offline instantly instead of waiting
+  // out its stats-silence timeout.
+  | "streamwizard.ingest_session_ended";
 
 export type OverlayEventType = EventSubSubscriptionType | StreamWizardEventType;
 
@@ -140,6 +144,13 @@ export interface IngestStatsPayload {
   retrans_pct?: number;
 }
 
+// Sent once when the media plane reports a session ended.
+export interface IngestSessionEndedPayload {
+  session_id: string;
+  /** Ingest node the session was on (INGEST_NODE_ID). */
+  node_id?: string;
+}
+
 // Host NIC totals only — cpu/ram/disk deliberately stay on the InfluxDB
 // polling path; the WS carries just the network signal.
 export interface IngestNodeBandwidthPayload {
@@ -159,11 +170,26 @@ export interface NodeMetricsMessage {
   payload: IngestNodeBandwidthPayload;
 }
 
+// App-level heartbeat: bot sockets are otherwise send-only, so without a
+// reply the client can't tell a healthy link from a half-open TCP connection.
+export interface BotPingMessage {
+  kind: "ping";
+  /** Epoch ms at send time; echoed back in the pong. */
+  ts: number;
+}
+
+// ws-server's reply to BotPingMessage — the only message a bot ever receives.
+export interface BotPongMessage {
+  kind: "pong";
+  ts: number;
+}
+
 export type OverlaySocketMessage =
   // StreamWizard internal
   | { type: "streamwizard.geo"; status: "connected"; payload: OverlayGeoPayload }
   | { type: "streamwizard.geo"; status: "offline" }
   | { type: "streamwizard.ingest_stats"; payload: IngestStatsPayload }
+  | { type: "streamwizard.ingest_session_ended"; payload: IngestSessionEndedPayload }
   // Channel
   | { type: "channel.update";                                             payload: ChannelUpdateEvent }
   | { type: "channel.follow";                                             payload: ChannelFollowEvent }
@@ -261,5 +287,6 @@ export interface BotBroadcastMessage {
 }
 
 // Everything a bot socket may send: room-scoped fan-out messages plus
-// node-scoped metrics. Discriminate on `"kind" in msg`.
-export type BotOutboundMessage = BotBroadcastMessage | NodeMetricsMessage;
+// node-scoped metrics and heartbeats. `"kind" in msg` splits fan-out from
+// node-scoped; discriminate the rest on `msg.kind`.
+export type BotOutboundMessage = BotBroadcastMessage | NodeMetricsMessage | BotPingMessage;
