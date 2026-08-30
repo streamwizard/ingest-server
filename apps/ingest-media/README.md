@@ -40,7 +40,9 @@ OBS Media Source ──SRT (streamid=out-key)─► output_router :9000
 | `INGEST_SRT_PORT` | `8888` | Public SRT ingest (UDP) |
 | `INGEST_SRTLA_SRT_PORT` | `8889` | Internal SRT port fed by srtla_receiver |
 | `INGEST_OUTPUT_PORT` | `9000` | SRT output OBS pulls from (UDP) |
-| `INGEST_SRT_LATENCY_MS` | `4000` | SRT receiver-buffer latency on every listener |
+| `INGEST_SRT_INGRESS_LATENCY_MS` | `4000` | SRT receiver-buffer latency on the ingress listeners (phone -> server, cellular). Legacy `INGEST_SRT_LATENCY_MS` still works as a fallback |
+| `INGEST_SRT_EGRESS_LATENCY_MS` | `300` | SRT receiver-buffer latency on the output listener (server -> OBS over Tailscale); match the OBS Media Source `latency=` param |
+| `INGEST_AV_SYNC_ENABLED` | `true` | Report the incoming stream's audio/video timestamp skew (see `av_sync.py`) |
 | `INGEST_CONTROL_TIMEOUT` | `5` | Control-plane request timeout (s) |
 | `INGEST_LOG_LEVEL` | `INFO` | Log level |
 

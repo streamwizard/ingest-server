@@ -14,6 +14,7 @@ import threading
 from typing import Callable, Optional
 
 from . import libsrt
+from .av_sync import AvSyncTracker
 from .output_router import OutputChannel
 from .stream_stats import BitrateTracker
 
@@ -33,6 +34,7 @@ class SrtRelay:
         channel: OutputChannel,
         on_end: Callable[[Optional[int]], None],
         on_stats: Optional[Callable[[dict], None]] = None,
+        av_sync: bool = True,
     ) -> None:
         self._conn = conn_sock
         self._channel = channel
@@ -41,6 +43,7 @@ class SrtRelay:
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self.tracker = BitrateTracker()
+        self.av_sync = AvSyncTracker() if av_sync else None
         self._stats_timer: Optional[threading.Timer] = None
 
     def start(self) -> None:
@@ -61,6 +64,8 @@ class SrtRelay:
         srt_stats = libsrt.get_stats(self._conn)
         if srt_stats is not None:
             stats.update(srt_stats)
+        if self.av_sync is not None:
+            stats.update(self.av_sync.sample())
         try:
             self._on_stats(stats)
         except Exception:  # noqa: BLE001
@@ -76,6 +81,11 @@ class SrtRelay:
                     break
                 self.tracker.add_bytes(len(chunk))
                 self._channel.send(chunk)
+                # After the forward, never before: parsing is the most
+                # expensive thing in this loop and must not sit in the path
+                # the bytes take to OBS.
+                if self.av_sync is not None:
+                    self.av_sync.feed(chunk)
         except Exception:  # noqa: BLE001
             log.exception("srt relay feed error")
         finally:
