@@ -35,8 +35,10 @@ const bodySchema = z.object({
     // behind video. min/max bound the mux interleave spread, so a real offset
     // (tight spread off zero) reads differently from interleave noise.
     av_skew_ms: z.number().optional(),
-    av_skew_ms_min: z.number().optional(),
-    av_skew_ms_max: z.number().optional(),
+    av_skew_raw_ms: z.number().optional(),
+    av_audio_pes_interval_ms: z.number().optional(),
+    av_skew_raw_ms_min: z.number().optional(),
+    av_skew_raw_ms_max: z.number().optional(),
     av_skew_samples: z.number().optional(),
     video_pes_count: z.number().optional(),
     audio_pes_count: z.number().optional(),
