@@ -20,10 +20,25 @@ which the tracker measures from consecutive audio PTS rather than assuming:
 
     av_skew_ms = mean_audio_pes_interval - median(video_pts - audio_pts)
 
-On the synced reference that lands at -14.6ms, so treat the figure as good to
-a few tens of milliseconds. `av_skew_raw_ms` and `av_audio_pes_interval_ms`
-are reported alongside so the correction is auditable rather than a magic
-number, and min/max bound the spread.
+`av_skew_raw_ms` and `av_audio_pes_interval_ms` are reported alongside so the
+correction is auditable rather than a magic number, and min/max bound the
+spread.
+
+Two known biases, both small and both pinned by the tests:
+
+- A synced stream reads about half a video frame high (+16.7ms at 30fps),
+  because the newest video PTS is up to one frame stale at the moment an
+  audio PES is sampled. Independent of how audio is packetised.
+- The correction assumes a muxer writes each audio PES one interval ahead of
+  its matching video. One that leads by some other amount reads off by
+  (interval - lead), so the error is bounded by the interval. A stream
+  sending one AAC frame per PES (~23ms, seen from a phone encoder on
+  staging) is therefore trustworthy to a few tens of ms whatever its muxer
+  does; a stream aggregating ~15 frames (~320ms, ffmpeg's default) leans on
+  the assumption holding.
+
+Either way the figure is good to a few tens of milliseconds, which is what a
+lip-sync problem worth chasing has to clear anyway.
 
 Sign convention: positive `av_skew_ms` means audio is BEHIND video.
 
