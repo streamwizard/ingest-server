@@ -30,8 +30,22 @@ AUDIO_STREAM_ID = 0xC0
 
 TICKS_PER_MS = 90
 FRAME_TICKS = 3000  # 30fps
-AUDIO_PES_TICKS = 28_800  # 320ms, as measured on the reference stream
+
+# Two real muxes, an order of magnitude apart in how they packetise audio:
+#   ffmpeg aggregates ~15 AAC frames per PES  -> ~320ms
+#   a phone encoder seen on staging sends one -> ~23ms (1024 samples @ 48kHz)
+# The correction subtracts whichever interval the stream is actually using, so
+# both have to work.
+AUDIO_PES_TICKS = 28_800  # 320ms, ffmpeg reference stream
+AUDIO_PES_TICKS_SMALL = 2_090  # ~23ms, one AAC frame per PES
+
 SRT_PAYLOAD = 1316  # 7 x 188, the usual SRT live message size
+
+# Skew is sampled at each audio PES against the newest video PTS, which by
+# then is up to one frame stale — so a perfectly synced stream reads half a
+# frame high. Independent of how the audio is packetised: it shows up as the
+# same +16.7ms on both the 320ms and the 23ms mux.
+HALF_FRAME_MS = FRAME_TICKS / TICKS_PER_MS / 2
 
 
 def _encode_pts(pts: int) -> bytes:
@@ -53,18 +67,31 @@ def ts_packet(pid: int, stream_id: int, pts: int) -> bytes:
     return (header + pes).ljust(188, b"\xff")
 
 
-def build_stream(seconds: int = 10, audio_shift_ticks: int = 0) -> bytes:
-    """A muxed TS. `audio_shift_ticks` stamps audio on an offset clock, the way
-    an encoder with a wrong audio time-base would, without moving the packets."""
+def build_stream(
+    seconds: int = 10,
+    audio_shift_ticks: int = 0,
+    audio_pes_ticks: int = AUDIO_PES_TICKS,
+    mux_lead_ticks: int | None = None,
+) -> bytes:
+    """A muxed TS.
+
+    `audio_shift_ticks` stamps audio on an offset clock, the way an encoder
+    with a wrong audio time-base would, without moving the packets.
+
+    `mux_lead_ticks` is how far ahead of its matching video the muxer writes
+    each audio PES. It defaults to one PES interval, which is what the tracker
+    assumes and what the ffmpeg reference stream does (318.6ms interval,
+    316.1ms measured lead). Passing something else models a muxer that does
+    not, which is how the bound on the correction's error gets tested.
+    """
+    lead = audio_pes_ticks if mux_lead_ticks is None else mux_lead_ticks
     packets: list[bytes] = []
     next_audio_pts = 0
     for frame in range(seconds * 30):
         video_pts = frame * FRAME_TICKS
-        # Audio PES for timestamp P is written ahead of the video carrying
-        # P + one PES interval. This lead is the bias the tracker corrects.
-        while next_audio_pts + AUDIO_PES_TICKS <= video_pts:
+        while next_audio_pts + lead <= video_pts:
             packets.append(ts_packet(AUDIO_PID, AUDIO_STREAM_ID, next_audio_pts + audio_shift_ticks))
-            next_audio_pts += AUDIO_PES_TICKS
+            next_audio_pts += audio_pes_ticks
         packets.append(ts_packet(VIDEO_PID, VIDEO_STREAM_ID, video_pts))
     return b"".join(packets)
 
@@ -99,6 +126,49 @@ class AvSyncTrackerTest(unittest.TestCase):
         for ms in (-500, -100, 250, 500, 900):
             s = run(build_stream(audio_shift_ticks=ms * TICKS_PER_MS))
             self.assertAlmostEqual(s["av_skew_ms"] - base, ms, delta=20, msg=f"offset {ms}ms")
+
+    def test_small_audio_pes_mux(self):
+        """One AAC frame per PES (~23ms), as a phone encoder on staging sends.
+        An order of magnitude off the ffmpeg reference the correction was
+        derived from, so the interval must be measured, never assumed."""
+        s = run(build_stream(audio_pes_ticks=AUDIO_PES_TICKS_SMALL))
+        self.assertAlmostEqual(s["av_skew_ms"], HALF_FRAME_MS, delta=10)
+        self.assertAlmostEqual(s["av_audio_pes_interval_ms"], 23, delta=3)
+
+    def test_small_audio_pes_mux_recovers_offset(self):
+        s = run(build_stream(audio_shift_ticks=500 * TICKS_PER_MS,
+                             audio_pes_ticks=AUDIO_PES_TICKS_SMALL))
+        self.assertAlmostEqual(s["av_skew_ms"], 500 + HALF_FRAME_MS, delta=10)
+
+    def test_offset_recovery_does_not_depend_on_pes_interval(self):
+        """The property that matters: whatever the mux does, an injected
+        offset must still come back 1:1."""
+        for interval in (AUDIO_PES_TICKS_SMALL, 9_000, AUDIO_PES_TICKS):
+            base = run(build_stream(audio_pes_ticks=interval))["av_skew_ms"]
+            for ms in (-400, 500):
+                s = run(build_stream(audio_shift_ticks=ms * TICKS_PER_MS, audio_pes_ticks=interval))
+                self.assertAlmostEqual(
+                    s["av_skew_ms"] - base, ms, delta=20,
+                    msg=f"interval {interval / 90:.0f}ms, offset {ms}ms",
+                )
+
+    def test_correction_error_is_bounded_by_the_pes_interval(self):
+        """The known limitation, pinned rather than papered over.
+
+        The correction assumes the muxer writes each audio PES one interval
+        ahead of its video. A muxer that leads by some other amount reads off
+        by (interval - lead), so the worst case is bounded by the interval
+        itself. That is why a 23ms-PES stream is trustworthy to a few tens of
+        ms no matter what its muxer does, while a 320ms-PES stream leans on
+        the assumption holding.
+        """
+        for interval in (AUDIO_PES_TICKS_SMALL, AUDIO_PES_TICKS):
+            for lead in (0, interval // 2, interval):
+                skew = run(build_stream(audio_pes_ticks=interval, mux_lead_ticks=lead))["av_skew_ms"]
+                self.assertLessEqual(
+                    abs(skew), interval / 90 + 20,
+                    msg=f"interval {interval / 90:.0f}ms, lead {lead / 90:.0f}ms read {skew}ms",
+                )
 
     def test_video_only_stream_reports_nothing(self):
         """No audio means no skew to report — never a fake zero."""
