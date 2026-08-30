@@ -30,6 +30,7 @@ class SrtListener:
         control: ControlClient,
         router: OutputRouter,
         latency_ms: int = 0,
+        av_sync: bool = True,
     ) -> None:
         assert protocol in ("srt", "srtla")
         self._port = port
@@ -37,6 +38,7 @@ class SrtListener:
         self._control = control
         self._router = router
         self._latency_ms = latency_ms
+        self._av_sync = av_sync
         self._listen_sock: Optional[int] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -95,7 +97,7 @@ class SrtListener:
         def on_stats(stats: dict) -> None:
             self._control.session_stats(auth.session_id, auth.user_id, self._protocol, stats)
 
-        relay = SrtRelay(conn, channel, on_end, on_stats)
+        relay = SrtRelay(conn, channel, on_end, on_stats, av_sync=self._av_sync)
         relay.start()
 
     def stop(self) -> None:

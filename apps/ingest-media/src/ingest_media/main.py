@@ -29,11 +29,17 @@ def main() -> None:
     libsrt.startup()
     control = ControlClient(config)
 
-    router = OutputRouter(config.output_port, latency_ms=config.srt_latency_ms)
+    router = OutputRouter(config.output_port, latency_ms=config.srt_egress_latency_ms)
     router.start()
 
-    srt = SrtListener(config.srt_port, "srt", control, router, latency_ms=config.srt_latency_ms)
-    srtla = SrtListener(config.srtla_srt_port, "srtla", control, router, latency_ms=config.srt_latency_ms)
+    srt = SrtListener(
+        config.srt_port, "srt", control, router,
+        latency_ms=config.srt_ingress_latency_ms, av_sync=config.av_sync_enabled,
+    )
+    srtla = SrtListener(
+        config.srtla_srt_port, "srtla", control, router,
+        latency_ms=config.srt_ingress_latency_ms, av_sync=config.av_sync_enabled,
+    )
     srt.start()
     srtla.start()
 

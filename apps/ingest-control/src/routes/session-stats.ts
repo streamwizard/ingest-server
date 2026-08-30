@@ -30,6 +30,16 @@ const bodySchema = z.object({
     ms_rcv_buf: z.number().optional(),
     byte_rcv_buf: z.number().optional(),
     pkt_flight_size: z.number().optional(),
+    // A/V sync of the incoming MPEG-TS, read off its PES timestamps by the
+    // media plane (see ingest-media/av_sync.py). Positive av_skew_ms = audio
+    // behind video. min/max bound the mux interleave spread, so a real offset
+    // (tight spread off zero) reads differently from interleave noise.
+    av_skew_ms: z.number().optional(),
+    av_skew_ms_min: z.number().optional(),
+    av_skew_ms_max: z.number().optional(),
+    av_skew_samples: z.number().optional(),
+    video_pes_count: z.number().optional(),
+    audio_pes_count: z.number().optional(),
     // Session totals
     pkt_recv_loss_total: z.number().optional(),
     pkt_recv_drop_total: z.number().optional(),

@@ -26,7 +26,7 @@ an SRT caller (a Media Source) to the output listener over Tailscale.
 In OBS, add a **Media Source** with:
 
 ```
-srt://<vm-tailscale-ip>:9000?streamid=<output-key>&latency=4000
+srt://<vm-tailscale-ip>:9000?streamid=<output-key>&latency=300
 ```
 
 The `output-key` must be an active row in `ingest_output_keys` paired with the
@@ -47,8 +47,13 @@ docker compose logs -f
   (compose wires both from the same `.env` var).
 - `TAILSCALE_IP` is the VM's Tailscale address; the `:9000` output port binds
   only to it. Leave it empty locally to publish on all interfaces for testing.
-- Set `INGEST_SRT_LATENCY_MS` (default `4000`) to the SRT receiver latency; match
-  it on the OBS Media Source `latency=` query param.
+- `INGEST_SRT_INGRESS_LATENCY_MS` (default `4000`) is the receiver latency on the
+  phone-facing listeners — the cellular retransmit budget. The legacy
+  `INGEST_SRT_LATENCY_MS` name still works as a fallback for it.
+- `INGEST_SRT_EGRESS_LATENCY_MS` (default `300`) is the receiver latency on the
+  `:9000` output listener; the hop to OBS is server-to-server over Tailscale so
+  it stays small. Match it on the OBS Media Source `latency=` query param — SRT
+  negotiates the higher of the two sides.
 - Pin the Belabox `srtla` revision in `srtla/Dockerfile` for reproducible builds.
 - Live + global metrics are written to InfluxDB (set `INFLUXDB_*`, supplied via
   Doppler) and pushed live over WebSocket; durable session records go to Supabase.
