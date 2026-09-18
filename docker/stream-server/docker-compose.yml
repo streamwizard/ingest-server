@@ -27,8 +27,11 @@ services:
       HOST_NET_DEV: /proc/1/net/dev
     ports:
       # /health for the monitoring alerter — published ONLY on the Tailscale
-      # interface, same pattern as ingest-media's OBS output port below.
-      - "${TAILSCALE_IP}:8090:8090"
+      # interface, same pattern as ingest-media's OBS output port below. The
+      # `:?` makes compose refuse to start when TAILSCALE_IP is blank: an
+      # empty host IP would silently mean 0.0.0.0, and Docker-published ports
+      # bypass ufw, so there is no second line of defence.
+      - "${TAILSCALE_IP:?TAILSCALE_IP must be set in .env (tailscale ip -4)}:8090:8090"
     networks:
       - stream-server
     restart: unless-stopped
@@ -41,8 +44,8 @@ services:
       - "8888:8888/udp"   # public SRT ingest
       # Output OBS pulls from — published ONLY on the Tailscale interface so it
       # is never exposed to the public internet. Set TAILSCALE_IP in .env to the
-      # VM's Tailscale address.
-      - "${TAILSCALE_IP}:9000:9000/udp"
+      # VM's Tailscale address; blank hard-fails (see ingest-control above).
+      - "${TAILSCALE_IP:?TAILSCALE_IP must be set in .env (tailscale ip -4)}:9000:9000/udp"
     networks:
       - stream-server
     depends_on:
