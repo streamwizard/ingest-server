@@ -490,7 +490,7 @@ with open(env_path, "w") as f:
     f.write("INGEST_CONTROL_TIMEOUT=5\n")
     f.write("INGEST_LOG_LEVEL=INFO\n")
     f.write(f"TAILSCALE_IP={tailscale_ip}\n")
-    f.write("WS_SERVER_URL=\n")
+    f.write(f"WS_SERVER_URL={data.get('ws_server_url') or ''}\n")
     f.write(f"INFLUXDB_URL={data.get('influxdb_url') or ''}\n")
     f.write(f"INFLUXDB_TOKEN={data.get('influxdb_token') or ''}\n")
     f.write(f"INFLUXDB_ORG={data.get('influxdb_org') or ''}\n")
