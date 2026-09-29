@@ -55,5 +55,6 @@ docker compose logs -f
   it stays small. Match it on the OBS Media Source `latency=` query param — SRT
   negotiates the higher of the two sides.
 - Pin the Belabox `srtla` revision in `srtla/Dockerfile` for reproducible builds.
-- Live + global metrics are written to InfluxDB (set `INFLUXDB_*`, supplied via
-  Doppler) and pushed live over WebSocket; durable session records go to Supabase.
+- Live + global metrics are written to the InfluxDB `ingest-nodes` bucket of the
+  environment's org (set `INFLUXDB_URL` / `INFLUXDB_TOKEN` / `INFLUXDB_ORG`,
+  supplied via Doppler) and pushed live over WebSocket; durable session records go to Supabase.

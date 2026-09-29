@@ -494,7 +494,6 @@ with open(env_path, "w") as f:
     f.write(f"INFLUXDB_URL={data.get('influxdb_url') or ''}\n")
     f.write(f"INFLUXDB_TOKEN={data.get('influxdb_token') or ''}\n")
     f.write(f"INFLUXDB_ORG={data.get('influxdb_org') or ''}\n")
-    f.write(f"INFLUXDB_BUCKET={data.get('influxdb_bucket') or ''}\n")
     # Blank by default -- docker-compose.yml falls back to :latest. Set this
     # to pin the node to a specific build (e.g. sha-abc1234) without editing
     # docker-compose.yml.
