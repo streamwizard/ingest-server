@@ -1,0 +1,29 @@
+# Dev box overlay (WSL2 + Docker Desktop): builds the images from this checkout
+# instead of pulling them from GHCR, reads .env.local instead of .env, and
+# binds the Tailscale-only ports to loopback. No Tailscale, ufw or systemd.
+# Use scripts/local/up.sh rather than calling compose by hand; it passes the
+# right files and --env-file.
+services:
+  ingest-control:
+    image: ingest-control:local
+    build:
+      context: ../..
+      dockerfile: apps/ingest-control/Dockerfile
+    env_file: !override
+      - ../../.env.local
+    extra_hosts:
+      # rest-api (and InfluxDB, if configured) run on the host.
+      - "host.docker.internal:host-gateway"
+
+  ingest-media:
+    image: ingest-media:local
+    build:
+      context: ../..
+      dockerfile: apps/ingest-media/Dockerfile
+    env_file: !override
+      - ../../.env.local
+
+  srtla-receiver:
+    image: srtla-receiver:local
+    build:
+      context: srtla
