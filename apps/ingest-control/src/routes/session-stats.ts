@@ -2,7 +2,7 @@ import { type Context } from "hono";
 import { z } from "zod";
 import { trackIngestStreamSample } from "@repo/metrics";
 import { insertSessionStats, type SessionStatsRow } from "../clients/streamwizard-api/sessions";
-import { broadcastSessionStats } from "../clients/streamwizard-api/events";
+import { broadcastSessionStats } from "../clients/ws-server/events";
 
 const bodySchema = z.object({
   session_id: z.string().uuid(),
@@ -172,10 +172,11 @@ export async function sessionStatsHandler(c: Context) {
     byte_recv_total: body.stats.byte_recv_total,
   });
 
-  // Live push through rest-api: full raw + derived set, so the streamer's app
-  // decides when to switch scenes on whichever parameters it cares about.
-  // rest-api adds node_id + stream key identity so consumers (monitor,
-  // multi-camera dashboards) can attribute the stream without a DB lookup.
+  // Live push over the ws-server socket: full raw + derived set, so the
+  // streamer's app decides when to switch scenes on whichever parameters it
+  // cares about. ws-server adds node_id + stream key identity so consumers
+  // (monitor, multi-camera dashboards) can attribute the stream without a DB
+  // lookup.
   broadcastSessionStats(body.session_id, body.protocol, fullStats);
 
   return c.json({ ok: true });

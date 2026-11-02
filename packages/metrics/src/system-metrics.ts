@@ -21,11 +21,10 @@ export interface HostSystemSample {
   tailscale_tx_bytes_per_sec?: number;
   /** Root filesystem usage; omitted when the sampler couldn't stat it. */
   disk_used_pct?: number;
-  /** 1 while rest-api answered the node's last request, 0 while it doesn't.
-   *  Every live event and session write goes through rest-api, so 0 means
-   *  the panel sees nothing from this node. Meant for an alerter rule that
-   *  fires on 0 (replacing `ingest.ws_broadcast_down`). */
-  rest_api_connected?: number;
+  /** 1 while the ws-server socket is up, 0 while it's down; omitted entirely
+   *  in environments with no ws-server. The alerter's
+   *  `ingest.ws_broadcast_down` rule fires on 0. */
+  ws_broadcast_connected?: number;
 }
 
 export function trackHostSystemSample(nodeId: string, sample: HostSystemSample): void {

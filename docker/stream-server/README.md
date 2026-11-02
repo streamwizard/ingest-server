@@ -57,4 +57,4 @@ docker compose logs -f
 - Pin the Belabox `srtla` revision in `srtla/Dockerfile` for reproducible builds.
 - Live + global metrics are written to the InfluxDB `ingest-nodes` bucket of the
   environment's org (set `INFLUXDB_URL` / `INFLUXDB_TOKEN` / `INFLUXDB_ORG`,
-  supplied via Doppler) and pushed live through rest-api to ws-server; durable session records go through rest-api too.
+  supplied via Doppler) and pushed live to ws-server over the node's own socket; durable session records go through rest-api.

@@ -6,6 +6,7 @@ import { authorizeHandler } from "./routes/authorize";
 import { sessionEndHandler } from "./routes/session-end";
 import { sessionStatsHandler, getSessionStatsHandler, startSessionStatsFlusher } from "./routes/session-stats";
 import { startSystemMetricsSampler, startNodeBandwidthBroadcaster } from "./services/system-metrics-sampler";
+import { wsServerClient } from "./clients/ws-server/client";
 
 const app = new Hono();
 
@@ -27,6 +28,7 @@ app.post("/internal/session-stats", sessionStatsHandler);
 app.get("/internal/session-stats/:sessionId", getSessionStatsHandler);
 
 startSessionStatsFlusher();
+wsServerClient.connect();
 startSystemMetricsSampler(env.INGEST_NODE_ID);
 startNodeBandwidthBroadcaster();
 

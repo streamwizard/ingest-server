@@ -13,10 +13,19 @@ to manual `.env` setup when they're omitted.
 
 Like obs-instance-manager, `ingest-control` holds no database or ws-server
 credentials. Every read and write goes through `rest-api`'s node-scoped
-`/api/ingest-nodes/*` endpoints with a bearer `NODE_API_KEY`, and live events
-(`streamwizard.ingest_stats`, node bandwidth) are POSTed there too; rest-api
-looks up the session's owner and forwards them to ws-server. The client lives
-in `apps/ingest-control/src/clients/streamwizard-api/`.
+`/api/ingest-nodes/*` endpoints with a bearer `NODE_API_KEY`
+(`apps/ingest-control/src/clients/streamwizard-api/`).
+
+Live events are different, because the auto-switcher switches a stream
+offline when its stats go quiet, so they must not depend on rest-api being
+up. The node keeps its own WebSocket to ws-server (`role=ingest-node`,
+`apps/ingest-control/src/clients/ws-server/`). Before each dial it asks
+rest-api for a short-lived token that names the node
+(`POST /api/ingest-nodes/me/ws-token`). When rest-api opens a session it
+registers the session's owner, stream key and node with ws-server. The node
+then sends only `{ session_id, stats }`; ws-server drops samples for sessions
+not registered to that node and adds the user, node id and stream key label
+itself. Once a socket is open, a rest-api outage doesn't touch it.
 
 The ingest claim flow is still stricter than obs-instance-manager's:
 

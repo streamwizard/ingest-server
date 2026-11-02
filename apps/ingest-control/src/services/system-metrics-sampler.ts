@@ -1,6 +1,6 @@
 import { trackHostSystemSample } from "@repo/metrics";
-import { isRestApiReachable } from "../clients/streamwizard-api/client";
-import { broadcastNodeBandwidth } from "../clients/streamwizard-api/events";
+import { wsServerClient } from "../clients/ws-server/client";
+import { broadcastNodeBandwidth } from "../clients/ws-server/events";
 
 // Periodic host CPU/RAM/bandwidth sampler for this ingest node, mirroring the
 // /proc-based technique obs-instance-manager uses for its own host metrics
@@ -187,9 +187,11 @@ export function startSystemMetricsSampler(nodeId: string, intervalMs = 10_000): 
           tailscale_rx_bytes_per_sec: s.tsRxBytesPerSec,
           tailscale_tx_bytes_per_sec: s.tsTxBytesPerSec,
           ...(s.diskUsedPct !== undefined ? { disk_used_pct: s.diskUsedPct } : {}),
-          // Whether rest-api answered the last request. Every live event and
-          // DB write rides it, so 0 means the panel sees nothing from this node.
-          rest_api_connected: isRestApiReachable() ? 1 : 0,
+          // Omitted (not 0) when this environment has no ws-server, so those
+          // nodes can't trip the ws_broadcast_down alert.
+          ...(wsServerClient.state() !== "disabled"
+            ? { ws_broadcast_connected: wsServerClient.state() === "connected" ? 1 : 0 }
+            : {}),
         });
       })
       .catch(() => {
@@ -204,11 +206,11 @@ export function startSystemMetricsSampler(nodeId: string, intervalMs = 10_000): 
 let lastNetWs: { rxBytes: number; txBytes: number; tsRxBytes: number; tsTxBytes: number; at: number } | null = null;
 
 /**
- * Realtime node-bandwidth push (through rest-api to ws-server), deliberately decoupled from the
+ * Realtime node-bandwidth push to ws-server, deliberately decoupled from the
  * 10s InfluxDB sampler: the monitor wants ~1s network data, but sampling
  * cpu/mem/disk (and writing Influx points) at 1Hz would be pure waste. This
  * loop reads only the NIC counters. Fire-and-forget like every other
- * broadcast — a failed request just means the sample is skipped.
+ * broadcast — a closed socket just means the sample is skipped.
  */
 export function startNodeBandwidthBroadcaster(intervalMs = 1_000): void {
   setInterval(() => {
@@ -222,7 +224,7 @@ export function startNodeBandwidthBroadcaster(intervalMs = 1_000): void {
         const dtSec = (now - prev.at) / 1000;
         if (dtSec <= 0) return;
 
-        // No node_id: rest-api knows which node is calling from its API key.
+        // No node_id: ws-server reads it from the socket's token.
         broadcastNodeBandwidth({
           ts: now,
           rx_bytes_per_sec: Math.max(0, (net.rxBytes - prev.rxBytes) / dtSec),
