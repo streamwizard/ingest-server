@@ -477,8 +477,6 @@ env_path, raw, tailscale_ip = sys.argv[1], sys.argv[2], sys.argv[3]
 data = json.loads(raw)
 with open(env_path, "w") as f:
     f.write("NODE_ENV=production\n")
-    f.write(f"SUPABASE_URL={data['supabase_url']}\n")
-    f.write(f"SUPABASE_SECRET_KEY={data['supabase_secret_key']}\n")
     f.write(f"INGEST_CONTROL_SECRET={data['ingest_control_secret']}\n")
     f.write("PORT=8090\n")
     f.write("INGEST_CONTROL_URL=http://ingest-control:8090\n")
@@ -490,7 +488,6 @@ with open(env_path, "w") as f:
     f.write("INGEST_CONTROL_TIMEOUT=5\n")
     f.write("INGEST_LOG_LEVEL=INFO\n")
     f.write(f"TAILSCALE_IP={tailscale_ip}\n")
-    f.write(f"WS_SERVER_URL={data.get('ws_server_url') or ''}\n")
     f.write(f"INFLUXDB_URL={data.get('influxdb_url') or ''}\n")
     f.write(f"INFLUXDB_TOKEN={data.get('influxdb_token') or ''}\n")
     f.write(f"INFLUXDB_ORG={data.get('influxdb_org') or ''}\n")
@@ -529,7 +526,7 @@ else
   if [ ! -f "$ENV_FILE" ]; then
     curl_with_backoff -fsSL -o "$ENV_FILE" "$RAW_BASE/$REF/.env.example" \
       || die "Failed to fetch .env.example from ref '$REF'. Check the --ref value and your network connection."
-    warn "No --rest-api-url/--token given. Scaffolded $ENV_FILE from .env.example -- fill in SUPABASE_URL, SUPABASE_SECRET_KEY, INGEST_CONTROL_SECRET, INGEST_CONTROL_URL by hand before starting."
+    warn "No --rest-api-url/--token given. Scaffolded $ENV_FILE from .env.example -- fill in REST_API_URL, NODE_API_KEY, INGEST_CONTROL_SECRET, INGEST_CONTROL_URL by hand before starting."
   else
     log "$ENV_FILE already exists, leaving it as-is."
   fi
@@ -551,7 +548,7 @@ sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && TAILSCALE_IP=\"\${TAILSCALE_I
 # both on 0.0.0.0 and nothing on the host would stop the traffic. Refusing to
 # start is the only safe answer until the node has actually joined Tailscale.
 MISSING_KEYS=""
-for key in SUPABASE_URL SUPABASE_SECRET_KEY INGEST_CONTROL_SECRET INGEST_CONTROL_URL TAILSCALE_IP; do
+for key in REST_API_URL NODE_API_KEY INGEST_CONTROL_SECRET INGEST_CONTROL_URL TAILSCALE_IP; do
   grep -q "^${key}=.\+" "$ENV_FILE" || MISSING_KEYS="$MISSING_KEYS $key"
 done
 

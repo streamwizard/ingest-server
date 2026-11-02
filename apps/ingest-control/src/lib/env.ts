@@ -4,9 +4,11 @@ const schema = z.object({
   NODE_ENV: z.enum(["development", "staging", "production"]).default("development"),
   PORT: z.coerce.number().default(8090),
 
-  // Supabase (service role — control plane bypasses RLS to validate keys)
-  SUPABASE_URL: z.string().url(),
-  SUPABASE_SECRET_KEY: z.string().min(1),
+  // The panel's rest-api. Every database read/write and every live event goes
+  // through it, authenticated with this node's own API key from the claim flow
+  // (see clients/streamwizard-api/client.ts).
+  REST_API_URL: z.string().url(),
+  NODE_API_KEY: z.string().min(1),
 
   // Shared secret the media plane must present on every internal call.
   INGEST_CONTROL_SECRET: z.string().min(1),
@@ -16,12 +18,6 @@ const schema = z.object({
   // Older installs wrote the id as NODE_ID, so fall back to that before
   // giving up with "unknown-node" (local/dev boxes that never claimed).
   INGEST_NODE_ID: z.string().default(process.env.NODE_ID || "unknown-node"),
-
-  // Realtime fan-out — push live ingest stats to ws-server as a "bot" client so
-  // a logged-in dashboard user can subscribe to their own room and watch them.
-  // Optional: if unset, live broadcast is skipped (durable history via Supabase
-  // still works).
-  WS_SERVER_URL: z.string().optional(),
 });
 
 export const env = schema.parse(process.env);

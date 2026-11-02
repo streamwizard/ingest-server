@@ -1,6 +1,6 @@
 import { trackHostSystemSample } from "@repo/metrics";
-import { env } from "../lib/env";
-import { wsBroadcastClient } from "../lib/ws-broadcast";
+import { isRestApiReachable } from "../clients/streamwizard-api/client";
+import { broadcastNodeBandwidth } from "../clients/streamwizard-api/events";
 
 // Periodic host CPU/RAM/bandwidth sampler for this ingest node, mirroring the
 // /proc-based technique obs-instance-manager uses for its own host metrics
@@ -187,9 +187,9 @@ export function startSystemMetricsSampler(nodeId: string, intervalMs = 10_000): 
           tailscale_rx_bytes_per_sec: s.tsRxBytesPerSec,
           tailscale_tx_bytes_per_sec: s.tsTxBytesPerSec,
           ...(s.diskUsedPct !== undefined ? { disk_used_pct: s.diskUsedPct } : {}),
-          // Omitted (not 0) when WS broadcast is disabled, so nodes without a
-          // configured ws-server can't trip the ws_broadcast_down alert.
-          ...(env.WS_SERVER_URL ? { ws_broadcast_connected: wsBroadcastClient.isConnected() ? 1 : 0 } : {}),
+          // Whether rest-api answered the last request. Every live event and
+          // DB write rides it, so 0 means the panel sees nothing from this node.
+          rest_api_connected: isRestApiReachable() ? 1 : 0,
         });
       })
       .catch(() => {
@@ -204,13 +204,13 @@ export function startSystemMetricsSampler(nodeId: string, intervalMs = 10_000): 
 let lastNetWs: { rxBytes: number; txBytes: number; tsRxBytes: number; tsTxBytes: number; at: number } | null = null;
 
 /**
- * Realtime node-bandwidth push to ws-server, deliberately decoupled from the
+ * Realtime node-bandwidth push (through rest-api to ws-server), deliberately decoupled from the
  * 10s InfluxDB sampler: the monitor wants ~1s network data, but sampling
  * cpu/mem/disk (and writing Influx points) at 1Hz would be pure waste. This
  * loop reads only the NIC counters. Fire-and-forget like every other
- * broadcast — a closed socket just means the sample is skipped.
+ * broadcast — a failed request just means the sample is skipped.
  */
-export function startNodeBandwidthBroadcaster(nodeId: string, intervalMs = 1_000): void {
+export function startNodeBandwidthBroadcaster(intervalMs = 1_000): void {
   setInterval(() => {
     readNetDevTotals()
       .then((net) => {
@@ -222,16 +222,13 @@ export function startNodeBandwidthBroadcaster(nodeId: string, intervalMs = 1_000
         const dtSec = (now - prev.at) / 1000;
         if (dtSec <= 0) return;
 
-        wsBroadcastClient.send({
-          kind: "node_metrics",
-          payload: {
-            node_id: nodeId,
-            ts: now,
-            rx_bytes_per_sec: Math.max(0, (net.rxBytes - prev.rxBytes) / dtSec),
-            tx_bytes_per_sec: Math.max(0, (net.txBytes - prev.txBytes) / dtSec),
-            tailscale_rx_bytes_per_sec: Math.max(0, (net.tsRxBytes - prev.tsRxBytes) / dtSec),
-            tailscale_tx_bytes_per_sec: Math.max(0, (net.tsTxBytes - prev.tsTxBytes) / dtSec),
-          },
+        // No node_id: rest-api knows which node is calling from its API key.
+        broadcastNodeBandwidth({
+          ts: now,
+          rx_bytes_per_sec: Math.max(0, (net.rxBytes - prev.rxBytes) / dtSec),
+          tx_bytes_per_sec: Math.max(0, (net.txBytes - prev.txBytes) / dtSec),
+          tailscale_rx_bytes_per_sec: Math.max(0, (net.tsRxBytes - prev.tsRxBytes) / dtSec),
+          tailscale_tx_bytes_per_sec: Math.max(0, (net.tsTxBytes - prev.tsTxBytes) / dtSec),
         });
       })
       .catch(() => {

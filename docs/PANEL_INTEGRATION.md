@@ -11,13 +11,14 @@ to manual `.env` setup when they're omitted.
 
 ## Why this differs from obs-instance-manager
 
-`ingest-control` talks to Supabase **directly** with a service-role key
-(`SUPABASE_URL`/`SUPABASE_SECRET_KEY`), unlike obs-instance-manager, which
-now goes through `rest-api`'s node-scoped endpoints using a bearer
-`NODE_API_KEY`. That means the claim response for an ingest node has to hand
-out the raw `SUPABASE_SECRET_KEY` — full service-role database access — not
-just a narrowly-scoped credential. This is a materially bigger blast radius
-if a claim token leaks or gets replayed against the wrong box, so:
+Like obs-instance-manager, `ingest-control` holds no database or ws-server
+credentials. Every read and write goes through `rest-api`'s node-scoped
+`/api/ingest-nodes/*` endpoints with a bearer `NODE_API_KEY`, and live events
+(`streamwizard.ingest_stats`, node bandwidth) are POSTed there too; rest-api
+looks up the session's owner and forwards them to ws-server. The client lives
+in `apps/ingest-control/src/clients/streamwizard-api/`.
+
+The ingest claim flow is still stricter than obs-instance-manager's:
 
 - The claim token TTL is **15 minutes** here, tighter than obs-instance-manager's 30.
 - `/api/ingest-nodes/claim` is only ever served over HTTPS in deployed environments.
@@ -116,15 +117,15 @@ before, since the key doesn't exist until then.
    same reason as obs-instance-manager's claim route: it's a
    machine-to-machine endpoint hit by a fresh, untrusted VM with nothing but
    a one-time token, and `ingest-control` itself can't host its own bootstrap
-   endpoint — it doesn't have `SUPABASE_SECRET_KEY` configured yet, which is
-   exactly what claiming is supposed to deliver.
+   endpoint — it doesn't have a `NODE_API_KEY` yet, which is exactly what
+   claiming is supposed to deliver.
 
 4. **rest-api validates and responds.** Look up the pending node by token
    hash, reject if expired/already claimed/not found (`404`/`409`/`410`). On
    success: mark the token consumed, fill in the self-reported fields on the
    row, slugify the node's `name` into a `hostname`, mint a fresh
-   `INGEST_CONTROL_SECRET`, a `node_api_key` (unused today, written for
-   forward-compat with a future heartbeat endpoint), and a Tailscale auth key
+   `INGEST_CONTROL_SECRET`, a `node_api_key` (ingest-control's bearer for every
+   `/api/ingest-nodes/*` call), and a Tailscale auth key
    (see "Automated Tailscale join" above; `null` if the Tailscale API call
    failed), set `status = 'linked'`, and return (actual current shape, see
    `apps/rest-api/src/routes/ingest-nodes.ts`):
@@ -133,11 +134,9 @@ before, since the key doesn't exist until then.
    {
      "node_id": "<uuid, the ingest_nodes.id>",
      "hostname": "ingest-box-1",
-     "node_api_key": "<unused today, forward-compat>",
+     "node_api_key": "<this node's rest-api bearer>",
      "ingest_control_secret": "<fresh per-box shared secret>",
      "tailscale_authkey": "<single-use, tag:ingest-node key, or null>",
-     "supabase_url": "https://xxxx.supabase.co",
-     "supabase_secret_key": "<service-role key>",
      "rest_api_url": "https://api.example.com"
    }
    ```
@@ -160,9 +159,6 @@ before, since the key doesn't exist until then.
 - **No live health polling.** `ingest-control`'s HTTP port is never published
   by docker-compose, so there's nothing for the admin's browser to reach —
   unlike obs-instance-manager's `GET /admin/metrics/stream`. The admin UI
-  shows only the DB `status` enum (`pending`/`linked`/`disabled`). A real
-  heartbeat (ingest-control periodically calling a `rest-api` endpoint with
-  its `node_api_key`) would be the natural way to add this later.
+  shows only the DB `status` enum (`pending`/`linked`/`disabled`).
 - **No per-node detail page.** The admin list page is the only surface for
-  v1; `node_api_key`/`ingest_node_api_keys` exist purely for that future
-  heartbeat, unused by anything today.
+  v1.

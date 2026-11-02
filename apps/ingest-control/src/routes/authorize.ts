@@ -1,7 +1,6 @@
 import { type Context } from "hono";
 import { z } from "zod";
-import { supabase } from "@repo/supabase";
-import { getStreamKeyOwner, touchStreamKey, insertIngestSession, getOutputKeysForKey } from "@repo/supabase/queries/ingest";
+import { openSession, type OpenedSession } from "../clients/streamwizard-api/sessions";
 import { registerSessionKey } from "./session-stats";
 
 const bodySchema = z.object({
@@ -13,8 +12,8 @@ const bodySchema = z.object({
 /**
  * POST /internal/authorize
  *
- * Called by the media plane the moment a streamer connects. Validates the
- * stream key, opens an ingest session, and returns the output key(s) under
+ * Called by the media plane the moment a streamer connects. rest-api validates
+ * the stream key and opens an ingest session; this returns the output key(s) under
  * which the media plane should register this session's output channel — an OBS
  * Media Source presents one of these as its SRT streamid to pull the feed from
  * the shared output listener.
@@ -36,32 +35,27 @@ export async function authorizeHandler(c: Context) {
     return c.json({ error: "Invalid request body" }, 400);
   }
 
-  const owner = await getStreamKeyOwner(supabase, body.stream_key);
-  if (!owner) {
-    return c.json({ error: "Invalid stream key" }, 403);
-  }
-
-  // Best-effort last-used bump; never blocks the connection.
-  void touchStreamKey(supabase, body.stream_key);
-
-  const { data: session, error } = await insertIngestSession(supabase, {
-    user_id: owner.user_id,
-    key_id: owner.key_id,
-    protocol: body.protocol,
-    remote_ip: body.remote_ip ?? null,
-  });
-
-  if (error || !session) {
+  let session: OpenedSession | null;
+  try {
+    session = await openSession({
+      protocol: body.protocol,
+      stream_key: body.stream_key,
+      remote_ip: body.remote_ip ?? null,
+    });
+  } catch (err) {
+    console.error("[authorize] failed to open session:", (err as Error).message);
     return c.json({ error: "Failed to open session" }, 500);
   }
 
-  registerSessionKey(session.id, owner.key_id, owner.label);
+  if (!session) {
+    return c.json({ error: "Invalid stream key" }, 403);
+  }
 
-  const outputKeys = await getOutputKeysForKey(supabase, owner.key_id);
+  registerSessionKey(session.session_id, session.stream_key_id, session.label);
 
   return c.json({
-    user_id: owner.user_id,
-    session_id: session.id,
-    output_keys: outputKeys,
+    user_id: session.user_id,
+    session_id: session.session_id,
+    output_keys: session.output_keys,
   });
 }

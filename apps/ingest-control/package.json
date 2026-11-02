@@ -5,13 +5,12 @@
   "scripts": {
     "dev": "doppler run -- bun --hot src/index.ts",
     "start": "bun src/index.ts",
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "test": "bash scripts/test.sh"
   },
   "dependencies": {
     "@repo/metrics": "workspace:*",
-    "@repo/supabase": "workspace:*",
-    "@repo/types": "workspace:*",
-    "@supabase/supabase-js": "^2.105.1",
+    "axios": "^1.18.1",
     "hono": "^4.12.21",
     "zod": "^4.4.3"
   },
