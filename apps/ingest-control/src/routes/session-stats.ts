@@ -1,10 +1,8 @@
 import { type Context } from "hono";
 import { z } from "zod";
-import { supabase } from "@repo/supabase";
-import { insertIngestSessionStatsBatch, type IngestSessionStatsInsert } from "@repo/supabase/queries/ingest";
 import { trackIngestStreamSample } from "@repo/metrics";
-import { wsBroadcastClient } from "../lib/ws-broadcast";
-import { env } from "../lib/env";
+import { insertSessionStats, type SessionStatsRow } from "../clients/streamwizard-api/sessions";
+import { broadcastSessionStats } from "../clients/ws-server/events";
 
 const bodySchema = z.object({
   session_id: z.string().uuid(),
@@ -96,7 +94,7 @@ export function registerSessionKey(sessionId: string, streamKeyId: string, label
 // Deliberately dropped (not retried) on insert failure — a metrics pipeline
 // that retries forever on a network blip is how this buffer becomes the next
 // "store it in RAM" problem.
-let pendingRows: IngestSessionStatsInsert[] = [];
+let pendingRows: SessionStatsRow[] = [];
 
 const FLUSH_INTERVAL_MS = 30_000;
 
@@ -104,9 +102,10 @@ async function flushPendingStats(): Promise<void> {
   if (pendingRows.length === 0) return;
   const batch = pendingRows;
   pendingRows = [];
-  const { error } = await insertIngestSessionStatsBatch(supabase, batch);
-  if (error) {
-    console.error(`[session-stats] failed to insert batch of ${batch.length}:`, error);
+  try {
+    await insertSessionStats(batch);
+  } catch (err) {
+    console.error(`[session-stats] failed to insert batch of ${batch.length}:`, (err as Error).message);
   }
 }
 
@@ -160,7 +159,6 @@ export async function sessionStatsHandler(c: Context) {
   // richer transport fields live in InfluxDB; this stays a stable session log.
   pendingRows.push({
     session_id: body.session_id,
-    user_id: body.user_id,
     protocol: body.protocol,
     recorded_at: updatedAt,
     kbps: body.stats.kbps,
@@ -174,21 +172,12 @@ export async function sessionStatsHandler(c: Context) {
     byte_recv_total: body.stats.byte_recv_total,
   });
 
-  // Live push: full raw + derived set, so the streamer's app decides when to
-  // switch scenes on whichever parameters it cares about. node_id + stream key
-  // identity let consumers (monitor, multi-camera dashboards) attribute the
-  // stream without a DB lookup.
-  wsBroadcastClient.send({
-    userId: body.user_id,
-    type: "streamwizard.ingest_stats",
-    payload: {
-      session_id: body.session_id,
-      protocol: body.protocol,
-      node_id: env.INGEST_NODE_ID,
-      ...(streamKey ? { stream_key_id: streamKey.streamKeyId, label: streamKey.label } : {}),
-      ...fullStats,
-    },
-  });
+  // Live push over the ws-server socket: full raw + derived set, so the
+  // streamer's app decides when to switch scenes on whichever parameters it
+  // cares about. ws-server adds node_id + stream key identity so consumers
+  // (monitor, multi-camera dashboards) can attribute the stream without a DB
+  // lookup.
+  broadcastSessionStats(body.session_id, body.protocol, fullStats);
 
   return c.json({ ok: true });
 }

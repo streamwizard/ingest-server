@@ -5,8 +5,8 @@ import { internalAuth } from "./middleware/internal-auth";
 import { authorizeHandler } from "./routes/authorize";
 import { sessionEndHandler } from "./routes/session-end";
 import { sessionStatsHandler, getSessionStatsHandler, startSessionStatsFlusher } from "./routes/session-stats";
-import { wsBroadcastClient } from "./lib/ws-broadcast";
 import { startSystemMetricsSampler, startNodeBandwidthBroadcaster } from "./services/system-metrics-sampler";
+import { wsServerClient } from "./clients/ws-server/client";
 
 const app = new Hono();
 
@@ -28,9 +28,9 @@ app.post("/internal/session-stats", sessionStatsHandler);
 app.get("/internal/session-stats/:sessionId", getSessionStatsHandler);
 
 startSessionStatsFlusher();
-wsBroadcastClient.connect();
+wsServerClient.connect();
 startSystemMetricsSampler(env.INGEST_NODE_ID);
-startNodeBandwidthBroadcaster(env.INGEST_NODE_ID);
+startNodeBandwidthBroadcaster();
 
 Bun.serve({
   fetch: app.fetch,

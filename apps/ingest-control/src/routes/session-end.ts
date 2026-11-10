@@ -1,10 +1,7 @@
 import { type Context } from "hono";
 import { z } from "zod";
-import { supabase } from "@repo/supabase";
-import { endIngestSession } from "@repo/supabase/queries/ingest";
+import { endSession } from "../clients/streamwizard-api/sessions";
 import { clearSessionStats } from "./session-stats";
-import { wsBroadcastClient } from "../lib/ws-broadcast";
-import { env } from "../lib/env";
 
 const bodySchema = z.object({
   session_id: z.string().uuid(),
@@ -16,8 +13,13 @@ const bodySchema = z.object({
  * POST /internal/session-end
  *
  * Called by the media plane when a streamer disconnects. Closes the session row
- * and drops the cached live stats. (The media plane owns the output channel and
- * tears it down on its side.)
+ * through rest-api and drops the cached live stats. (The media plane owns the
+ * output channel and tears it down on its side.)
+ *
+ * rest-api pushes streamwizard.ingest_session_ended to the owner when it closes
+ * the row, so the auto-switcher reacts to a clean disconnect instantly instead
+ * of waiting out its stats-silence timeout. If that call fails, the timeout
+ * path still covers it.
  */
 export async function sessionEndHandler(c: Context) {
   let body: z.infer<typeof bodySchema>;
@@ -27,20 +29,12 @@ export async function sessionEndHandler(c: Context) {
     return c.json({ error: "Invalid request body" }, 400);
   }
 
-  const { error } = await endIngestSession(supabase, body.session_id, body.last_bitrate_kbps);
-  if (error) {
-    console.error(`[session-end] failed to close session ${body.session_id}:`, error);
+  try {
+    await endSession(body.session_id, body.last_bitrate_kbps);
+  } catch (err) {
+    console.error(`[session-end] failed to close session ${body.session_id}:`, (err as Error).message);
   }
   clearSessionStats(body.session_id);
-
-  // Live push so the auto-switcher reacts to a clean disconnect instantly
-  // instead of waiting out its stats-silence timeout. Best-effort: if the
-  // ws-server link is down, the timeout path still covers it.
-  wsBroadcastClient.send({
-    userId: body.user_id,
-    type: "streamwizard.ingest_session_ended",
-    payload: { session_id: body.session_id, node_id: env.INGEST_NODE_ID },
-  });
 
   return c.json({ ok: true });
 }

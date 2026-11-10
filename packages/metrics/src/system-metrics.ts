@@ -21,8 +21,8 @@ export interface HostSystemSample {
   tailscale_tx_bytes_per_sec?: number;
   /** Root filesystem usage; omitted when the sampler couldn't stat it. */
   disk_used_pct?: number;
-  /** 1 while the ws-server broadcast link is up, 0 while it's down; omitted
-   *  entirely on nodes where WS broadcast is disabled. The alerter's
+  /** 1 while the ws-server socket is up, 0 while it's down; omitted entirely
+   *  in environments with no ws-server. The alerter's
    *  `ingest.ws_broadcast_down` rule fires on 0. */
   ws_broadcast_connected?: number;
 }

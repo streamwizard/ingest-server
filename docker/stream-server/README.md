@@ -9,7 +9,7 @@ they are not part of this stack).
 
 | Service | Image | Ports (host) | Role |
 | --- | --- | --- | --- |
-| `ingest-control` | `apps/ingest-control` (Bun) | internal `8090` | Validates stream keys against Supabase, resolves output keys, records sessions + metrics |
+| `ingest-control` | `apps/ingest-control` (Bun) | internal `8090` | Validates stream keys, resolves output keys and records sessions through the panel's rest-api; writes metrics |
 | `ingest-media` | `apps/ingest-media` (pure Python + libsrt) | `8888/udp` (SRT in), `9000/udp` (SRT out, Tailscale-only) | Authorizes + passthrough-relays feeds; routes OBS pulls by output-key streamid |
 | `srtla-receiver` | Belabox `srtla_rec` | `5000/udp` (SRTLA) | Bonds SRTLA links → internal SRT (`ingest-media:8889`) |
 
@@ -57,4 +57,4 @@ docker compose logs -f
 - Pin the Belabox `srtla` revision in `srtla/Dockerfile` for reproducible builds.
 - Live + global metrics are written to the InfluxDB `ingest-nodes` bucket of the
   environment's org (set `INFLUXDB_URL` / `INFLUXDB_TOKEN` / `INFLUXDB_ORG`,
-  supplied via Doppler) and pushed live over WebSocket; durable session records go to Supabase.
+  supplied via Doppler) and pushed live to ws-server over the node's own socket; durable session records go through rest-api.

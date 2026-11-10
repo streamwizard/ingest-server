@@ -30,8 +30,5 @@
   "workspaces": [
     "apps/*",
     "packages/*"
-  ],
-  "dependencies": {
-    "server-only": "^0.0.1"
-  }
+  ]
 }
