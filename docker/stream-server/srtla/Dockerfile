@@ -12,8 +12,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git build-essential ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-# Pin to a tag/commit in production for reproducible builds.
-RUN git clone --depth 1 https://github.com/BELABOX/srtla.git . && make
+# Pinned, so every node runs a known version (BELABOX srtla is AGPL-3.0: we
+# must be able to name and offer the exact source we run). 37862da is upstream
+# main of 2025-04-05, the version the local image was built and measured with.
+ARG SRTLA_COMMIT=37862da3d0c13b46956efd3f88877053293d97d6
+RUN git init -q . \
+    && git remote add origin https://github.com/BELABOX/srtla.git \
+    && git fetch -q --depth 1 origin "$SRTLA_COMMIT" \
+    && git checkout -q FETCH_HEAD \
+    && make
 
 FROM debian:bookworm-slim AS runner
 COPY --from=build /src/srtla_rec /usr/local/bin/srtla_rec
